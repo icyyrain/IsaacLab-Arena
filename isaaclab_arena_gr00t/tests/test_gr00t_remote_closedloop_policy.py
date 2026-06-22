@@ -18,6 +18,8 @@ Verifies:
 
 from __future__ import annotations
 
+import argparse
+import json
 import numpy as np
 import torch
 from typing import Any
@@ -89,6 +91,7 @@ class _FakePolicyClient:
         self.init_kwargs = kwargs
         self._ping_ok = ping_ok
         self.last_observation: dict[str, Any] | None = None
+        self.observations: list[dict[str, Any]] = []
         self.get_action_calls = 0
         self.reset_called = False
 
@@ -97,9 +100,11 @@ class _FakePolicyClient:
 
     def get_action(self, observation: dict[str, Any]):
         self.last_observation = observation
+        self.observations.append(observation)
         self.get_action_calls += 1
+        batch_size = observation["video"]["ego_view"].shape[0]
         # Match the real PolicyClient return signature: (action_dict, latency_or_meta).
-        return _make_action_response(NUM_ENVS, ACTION_HORIZON), None
+        return _make_action_response(batch_size, ACTION_HORIZON), None
 
     def reset(self):
         self.reset_called = True
@@ -125,7 +130,13 @@ def fake_client_factory(monkeypatch):
     return factory
 
 
-def _build_policy(policy_config_yaml: str, action_scheduler_cls=None):
+def _build_policy(
+    policy_config_yaml: str,
+    action_scheduler_cls=None,
+    scheduler_mode: str | None = None,
+    async_metrics_path: str | None = None,
+    async_trace_path: str | None = None,
+):
     from isaaclab_arena_gr00t.policy.gr00t_remote_closedloop_policy import (
         Gr00tRemoteClosedloopPolicy,
         Gr00tRemoteClosedloopPolicyArgs,
@@ -143,8 +154,18 @@ def _build_policy(policy_config_yaml: str, action_scheduler_cls=None):
         remote_host="unused",
         remote_port=0,
         remote_api_token=None,
+        async_prefetch_lead_steps=25,
+        async_step_dt=0.02,
+        async_network_delay_s=0.0,
+        async_metrics_path=async_metrics_path,
+        async_trace_path=async_trace_path,
+        async_status_ui=False,
     )
-    return Gr00tRemoteClosedloopPolicy(args, action_scheduler_cls=action_scheduler_cls)
+    return Gr00tRemoteClosedloopPolicy(
+        args,
+        action_scheduler_cls=action_scheduler_cls,
+        scheduler_mode=scheduler_mode,
+    )
 
 
 # ------------------------------- tests ------------------------------- #
@@ -266,3 +287,112 @@ def test_synced_batch_holds_joint_position_for_env_after_partial_reset(
     assert clients[0].get_action_calls == 1
     expected_hold = policy._extract_hold_action(synthetic_observation)
     torch.testing.assert_close(action[1], expected_hold[1])
+
+
+def test_async_edf_bootstraps_each_environment_with_b1_requests(
+    policy_config_yaml, synthetic_observation, fake_client_factory
+):
+    clients = fake_client_factory(ping_ok=True)
+    policy = _build_policy(policy_config_yaml, scheduler_mode="async_edf")
+    policy.set_task_description("pick up the brown box")
+
+    action = policy.get_action(env=None, observation=synthetic_observation)
+    policy.close()
+
+    assert action.shape == (NUM_ENVS, EXPECTED_ACTION_DIM)
+    assert len(clients) == 1
+    assert clients[0].get_action_calls == NUM_ENVS
+    assert all(obs["video"]["ego_view"].shape[0] == 1 for obs in clients[0].observations)
+
+
+def test_async_edf_prefetches_individual_environment_requests(
+    policy_config_yaml, synthetic_observation, fake_client_factory
+):
+    clients = fake_client_factory(ping_ok=True)
+    policy = _build_policy(policy_config_yaml, scheduler_mode="async_edf")
+    policy.set_task_description("pick up the brown box")
+
+    for _ in range(26):
+        action = policy.get_action(env=None, observation=synthetic_observation)
+        assert action.shape == (NUM_ENVS, EXPECTED_ACTION_DIM)
+
+    results = policy._async_worker.wait_for_results(NUM_ENVS, timeout_s=2.0)
+    policy._process_async_results(results)
+    policy.close()
+
+    assert clients[0].get_action_calls == NUM_ENVS * 2
+    assert policy._async_scheduler.metrics()["request_count"] == NUM_ENVS
+
+
+def test_async_edf_writes_control_time_metrics_on_close(
+    tmp_path, policy_config_yaml, synthetic_observation, fake_client_factory
+):
+    fake_client_factory(ping_ok=True)
+    metrics_path = tmp_path / "async_metrics.json"
+    policy = _build_policy(
+        policy_config_yaml,
+        scheduler_mode="async_edf",
+        async_metrics_path=str(metrics_path),
+    )
+    policy.set_task_description("pick up the brown box")
+
+    policy.get_action(env=None, observation=synthetic_observation)
+    metrics = policy.async_metrics()
+    policy.close()
+
+    assert metrics["deadline_window_sim_s"] == 0.5
+    assert metrics["num_envs"] == NUM_ENVS
+    assert metrics_path.exists()
+
+
+def test_async_edf_writes_one_trace_frame_per_action_step(
+    tmp_path, policy_config_yaml, synthetic_observation, fake_client_factory
+):
+    fake_client_factory(ping_ok=True)
+    trace_path = tmp_path / "async_trace.json"
+    policy = _build_policy(
+        policy_config_yaml,
+        scheduler_mode="async_edf",
+        async_trace_path=str(trace_path),
+    )
+    policy.set_task_description("pick up the brown box")
+
+    policy.get_action(env=None, observation=synthetic_observation)
+    policy.get_action(env=None, observation=synthetic_observation)
+    policy.close()
+
+    trace = json.loads(trace_path.read_text())
+    assert trace["frame_count"] == 2
+    assert [frame["step"] for frame in trace["frames"]] == [0, 1]
+    assert len(trace["frames"][0]["robots"]) == NUM_ENVS
+    assert trace["frames"][0]["sim_time_s"] == pytest.approx(0.02)
+
+
+def test_remote_lifecycle_routes_runner_shutdown_to_close(
+    tmp_path, policy_config_yaml, synthetic_observation, fake_client_factory
+):
+    fake_client_factory(ping_ok=True)
+    metrics_path = tmp_path / "runner_metrics.json"
+    policy = _build_policy(
+        policy_config_yaml,
+        scheduler_mode="async_edf",
+        async_metrics_path=str(metrics_path),
+    )
+    policy.set_task_description("pick up the brown box")
+    policy.get_action(env=None, observation=synthetic_observation)
+
+    assert policy.is_remote is True
+    policy.shutdown_remote(kill_server=False)
+
+    assert metrics_path.exists()
+    assert policy._async_worker is None
+
+
+def test_remote_parser_defines_runner_kill_server_flag(policy_config_yaml) -> None:
+    from isaaclab_arena_gr00t.policy.gr00t_remote_closedloop_policy import Gr00tRemoteClosedloopPolicy
+
+    parser = Gr00tRemoteClosedloopPolicy.add_args_to_parser(argparse.ArgumentParser())
+    args = parser.parse_args(["--policy_config_yaml_path", policy_config_yaml])
+
+    assert args.remote_kill_on_exit is False
+    assert args.async_trace_path is None

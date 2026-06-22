@@ -5,4 +5,5 @@
 
 from .action_chunk_scheduler import ActionChunkScheduler
 from .action_scheduler import ActionScheduler
+from .async_deadline_action_scheduler import AsyncChunkRequest, AsyncDeadlineActionScheduler, AsyncEnvStatus
 from .synced_batch_action_scheduler import SyncedBatchActionScheduler

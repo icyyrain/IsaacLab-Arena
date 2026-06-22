@@ -6,6 +6,10 @@ This file provides guidance to AI coding agents (Claude Code, OpenAI Codex, etc.
 
 Isaac Lab-Arena is a composable environment-creation and policy-evaluation library for robotics simulation, built on Isaac Sim 6.0 and Isaac Lab 3.0 Beta. Status: alpha (`v0.2.x`); APIs are unstable. `main` is the active development branch.
 
+## Local workstation setup
+
+For this workstation's Windows-native Isaac Sim + Docker OpenPI deployment notes, see `LOCAL_RUNTIME_SETUP.md`.
+
 ## Skill library
 
 Recurring multi-step workflows (container management, the three-phase test suite, commits and PRs) are captured as Agent Skills under `.agents/skills/`. When a task matches a skill, prefer invoking it over re-deriving the procedure from this file.

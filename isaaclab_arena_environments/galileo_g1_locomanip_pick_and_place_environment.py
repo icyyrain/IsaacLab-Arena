@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import argparse
 import math
+import warnings
 from typing import TYPE_CHECKING, Any
 
 from isaaclab_arena.assets.register import register_environment
@@ -27,6 +28,11 @@ _LEGACY_DATAGEN_NAME = "locomanip_pick_and_place_D0"
 _LEGACY_BROWN_BOX_TO_BLUE_BIN_DESCRIPTION = (
     "Pick up the brown box from the shelf, and place it into the blue bin on the table located at the"
     " right of the shelf."
+)
+
+_CLEAN_OVERVIEW_PRIMS_TO_HIDE: tuple[str, ...] = (
+    "galileo_locomanip/Structure/walls",
+    "galileo_locomanip/Structure/doors",
 )
 
 
@@ -61,12 +67,40 @@ def _apply_legacy_datagen_name_override(
     return env_cfg
 
 
+def _apply_overview_camera(env_cfg: Any) -> Any:
+    """Frame the default multi-env Galileo grid from a fixed world-space camera."""
+    env_cfg.viewer.origin_type = "world"
+    env_cfg.viewer.eye = (0.0, -55.0, 38.0)
+    env_cfg.viewer.lookat = (0.0, 0.0, 0.0)
+    return env_cfg
+
+
+def _hide_background_prims(env, env_ids, prim_relative_paths: tuple[str, ...]) -> None:
+    """Hide selected background prims while preserving their physics state."""
+    from pxr import UsdGeom
+
+    del env_ids
+    stage = env.sim.stage
+    for env_prim_path in env.scene.env_prim_paths:
+        for prim_relative_path in prim_relative_paths:
+            prim_path = f"{env_prim_path}/{prim_relative_path}"
+            prim = stage.GetPrimAtPath(prim_path)
+            if prim.IsValid():
+                UsdGeom.Imageable(stage.OverridePrim(prim_path)).MakeInvisible()
+            else:
+                warnings.warn(
+                    f"_hide_background_prims: prim not found at '{prim_path}'; walls may remain visible.",
+                    stacklevel=1,
+                )
+
+
 @register_environment
 class GalileoG1LocomanipPickAndPlaceEnvironment(ExampleEnvironmentBase):
 
     name: str = "galileo_g1_locomanip_pick_and_place"
 
     def get_env(self, args_cli: argparse.Namespace) -> IsaacLabArenaEnvironment:
+        import isaaclab_arena.embodiments.g1.g1  # noqa: F401
         from isaaclab_arena.environments.isaaclab_arena_environment import IsaacLabArenaEnvironment
         from isaaclab_arena.scene.scene import Scene
         from isaaclab_arena.tasks.pick_and_place_task import G1PickAndPlaceMimicEnvCfg, PickAndPlaceTask
@@ -130,11 +164,22 @@ class GalileoG1LocomanipPickAndPlaceEnvironment(ExampleEnvironmentBase):
             )
 
         def env_cfg_callback(env_cfg):
-            return _apply_legacy_datagen_name_override(
+            env_cfg = _apply_legacy_datagen_name_override(
                 env_cfg,
                 pick_up_object_name=pick_up_object.name,
                 destination_name=destination.name,
             )
+            if args_cli.overview_camera:
+                env_cfg = _apply_overview_camera(env_cfg)
+            if args_cli.clean_overview:
+                from isaaclab.managers import EventTermCfg
+
+                env_cfg.events.hide_clean_overview_prims = EventTermCfg(
+                    func=_hide_background_prims,
+                    mode="prestartup",
+                    params={"prim_relative_paths": _CLEAN_OVERVIEW_PRIMS_TO_HIDE},
+                )
+            return env_cfg
 
         def _build_g1_pick_and_place_mimic_cfg(arm_mode):
             return G1PickAndPlaceMimicEnvCfg(
@@ -169,6 +214,16 @@ class GalileoG1LocomanipPickAndPlaceEnvironment(ExampleEnvironmentBase):
         parser.add_argument("--destination", type=str, default="blue_sorting_bin")
         parser.add_argument("--embodiment", type=str, default="g1_wbc_pink")
         parser.add_argument("--teleop_device", type=str, default=None)
+        parser.add_argument(
+            "--overview_camera",
+            action="store_true",
+            help="Use a world-space viewer camera that frames the multi-environment grid",
+        )
+        parser.add_argument(
+            "--clean_overview",
+            action="store_true",
+            help="Hide the Galileo wall geometry in the overview without changing collisions",
+        )
         parser.add_argument(
             "--task_description",
             type=str,
