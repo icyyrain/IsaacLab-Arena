@@ -69,6 +69,7 @@ TAGS
 
 # Models
 *models/
+*checkpoints/
 *isaaclab_arena/embodiments/g1/wbc_policy/models/
 *isaaclab_arena/embodiments/g1/wbc_policy/robot_model/
 
@@ -77,6 +78,10 @@ TAGS
 
 # Training logs and outputs
 *wandb/
+
+# Local evaluation and agent scratch artifacts
+/eval/
+/.superpowers/
 
 # Ignore plots
 isaaclab_arena/tests/**.png
