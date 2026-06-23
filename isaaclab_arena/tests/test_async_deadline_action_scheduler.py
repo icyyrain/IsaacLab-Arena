@@ -96,6 +96,38 @@ def test_virtual_gpu_timeline_serializes_same_time_requests() -> None:
     assert metrics["per_env"][1]["virtual_queue_wait_sim_s"] == pytest.approx([0.3])
 
 
+def test_gpu_service_intervals_preserve_control_time_order_and_duration() -> None:
+    scheduler = _make_scheduler(num_envs=2)
+    scheduler.bootstrap(torch.ones(2, 50, 2))
+    for _ in range(26):
+        scheduler.step(torch.zeros(2, 2))
+    requests = scheduler.take_pending_requests()
+
+    scheduler.accept_result(requests[0], torch.full((50, 2), 2.0), inference_wall_s=0.3)
+    scheduler.accept_result(requests[1], torch.full((50, 2), 3.0), inference_wall_s=0.2)
+
+    assert scheduler.metrics()["gpu_service_intervals"] == [
+        {
+            "env_id": 0,
+            "generation": 0,
+            "sequence": 0,
+            "submit_sim_time_s": 0.5,
+            "start_sim_time_s": 0.5,
+            "finish_sim_time_s": 0.8,
+            "inference_wall_s": 0.3,
+        },
+        {
+            "env_id": 1,
+            "generation": 0,
+            "sequence": 1,
+            "submit_sim_time_s": 0.5,
+            "start_sim_time_s": 0.8,
+            "finish_sim_time_s": 1.0,
+            "inference_wall_s": 0.2,
+        },
+    ]
+
+
 def test_reset_generation_rejects_stale_result() -> None:
     scheduler = _make_scheduler()
     scheduler.bootstrap(torch.ones(1, 50, 2))
@@ -107,6 +139,7 @@ def test_reset_generation_rejects_stale_result() -> None:
 
     assert not scheduler.accept_result(request, torch.full((50, 2), 2.0), inference_wall_s=0.1)
     assert scheduler.statuses == [AsyncEnvStatus.BOOTSTRAP]
+    assert scheduler.metrics()["gpu_service_intervals"] == []
 
 
 def test_state_snapshot_reports_deadline_countdown_and_hold() -> None:

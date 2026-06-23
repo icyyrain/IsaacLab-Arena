@@ -376,3 +376,43 @@ The overlay uses green for execution, yellow for queued requests, blue for infer
 and red for deadline misses / joint-position hold. `metrics.json` contains aggregate and per-environment
 timings; `trace.json` contains the state, queue depth, active inference environment, and deadline
 countdown for every control step.
+
+### Third-person mosaic demo
+
+Use `--mosaic_video` to record one pelvis-relative third-person camera per robot as a 3x2 mosaic. The
+Galileo wall and door render geometry is hidden automatically for this recording mode; collision and
+physics are unchanged. The observer cameras add rendering work, so this is a visualization run, not a
+capacity benchmark.
+
+```powershell
+& C:\Isaac\envs\arena-py311\python.exe `
+  C:\Projects\isaac\isaaclab_arena\evaluation\policy_runner.py `
+  --viz kit `
+  --experience C:\Projects\isaac\submodules\IsaacLab\apps\isaaclab.python.rendering.kit `
+  --policy_type isaaclab_arena_gr00t.policy.gr00t_remote_closedloop_policy.Gr00tRemoteClosedloopPolicy `
+  --policy_config_yaml_path isaaclab_arena_gr00t/policy/config/g1_locomanip_gr00t_closedloop_config.yaml `
+  --remote_host 127.0.0.1 --remote_port 5555 `
+  --scheduler async_edf `
+  --async_prefetch_lead_steps 25 --async_step_dt 0.02 `
+  --async_metrics_path eval/async_vla_demo/n6_mosaic_full/metrics.json `
+  --async_trace_path eval/async_vla_demo/n6_mosaic_full/trace.json `
+  --num_steps 1500 --num_envs 6 --env_spacing 20 --enable_cameras `
+  --mosaic_video --video_dir eval/videos/async_vla_n6_mosaic_full `
+  galileo_g1_locomanip_pick_and_place `
+  --object brown_box --embodiment g1_wbc_joint
+```
+
+Render the status HUD and scheduler timeline:
+
+```powershell
+& C:\Isaac\envs\arena-py311\python.exe `
+  isaaclab_arena_gr00t/scripts/render_async_status_video.py `
+  --input-video eval/videos/async_vla_n6_mosaic_full/third-person-mosaic-step-0.mp4 `
+  --trace eval/async_vla_demo/n6_mosaic_full/trace.json `
+  --output-video eval/videos/async_vla_n6_mosaic_full/third-person-mosaic-status.mp4 `
+  --timeline eval/async_vla_demo/n6_mosaic_full/timeline.png
+```
+
+The timeline has one lane per robot plus a GPU lane. Colored GPU segments identify the robot whose
+request is being served; gray is idle. These intervals use simulated control time derived from measured
+inference wall time, matching the deadline and queue model rather than slow Isaac Sim wall-clock playback.

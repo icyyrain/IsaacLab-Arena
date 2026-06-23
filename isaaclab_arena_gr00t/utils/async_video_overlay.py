@@ -32,6 +32,16 @@ _STATUS_LABEL = {
     "deadline_miss": "MISS / HOLD",
 }
 
+_GPU_ROBOT_BGR = (
+    (214, 104, 48),
+    (46, 139, 230),
+    (72, 170, 72),
+    (180, 105, 190),
+    (55, 190, 210),
+    (190, 145, 70),
+)
+_GPU_IDLE_BGR = (205, 205, 205)
+
 
 def overlay_status_frame(frame: np.ndarray, trace_frame: dict[str, Any]) -> np.ndarray:
     """Draw a compact scheduler panel directly into one BGR video frame."""
@@ -87,8 +97,9 @@ def build_status_timeline(trace: dict[str, Any], width: int = 1600) -> np.ndarra
     margin_right = 24
     header_height = 55
     lane_height = 44
+    gpu_lane_height = 44
     queue_height = 110
-    height = header_height + num_envs * lane_height + queue_height + 45
+    height = header_height + num_envs * lane_height + gpu_lane_height + queue_height + 70
     canvas = np.full((height, width, 3), 245, dtype=np.uint8)
     plot_width = max(1, width - margin_left - margin_right)
     cv2.putText(canvas, "Async VLA scheduler timeline", (18, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.72, (25, 25, 25), 2)
@@ -102,7 +113,32 @@ def build_status_timeline(trace: dict[str, Any], width: int = 1600) -> np.ndarra
             status = frame["robots"][env_id]["status"]
             cv2.rectangle(canvas, (x0, y0 + 4), (max(x0, x1), y0 + lane_height - 4), _STATUS_BGR[status], -1)
 
-    queue_top = header_height + num_envs * lane_height + 18
+    duration = float(frames[-1]["sim_time_s"]) if frames else 0.0
+    gpu_top = header_height + num_envs * lane_height + 8
+    gpu_bottom = gpu_top + gpu_lane_height - 8
+    cv2.putText(canvas, "GPU", (18, gpu_top + 25), cv2.FONT_HERSHEY_SIMPLEX, 0.48, (30, 30, 30), 1)
+    cv2.rectangle(canvas, (margin_left, gpu_top), (margin_left + plot_width, gpu_bottom), _GPU_IDLE_BGR, -1)
+    if duration > 0.0:
+        for interval in trace.get("gpu_service_intervals", []):
+            start_s = max(0.0, min(duration, float(interval["start_sim_time_s"])))
+            finish_s = max(start_s, min(duration, float(interval["finish_sim_time_s"])))
+            x0 = margin_left + int(start_s * plot_width / duration)
+            x1 = margin_left + int(finish_s * plot_width / duration)
+            env_id = int(interval["env_id"])
+            color = _GPU_ROBOT_BGR[env_id % len(_GPU_ROBOT_BGR)]
+            cv2.rectangle(canvas, (x0, gpu_top), (max(x0 + 1, x1), gpu_bottom), color, -1)
+            if x1 - x0 >= 24:
+                cv2.putText(
+                    canvas,
+                    f"R{env_id}",
+                    (x0 + 3, gpu_top + 23),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.35,
+                    (20, 20, 20),
+                    1,
+                )
+
+    queue_top = gpu_top + gpu_lane_height + 10
     cv2.putText(canvas, "queue", (18, queue_top + 18), cv2.FONT_HERSHEY_SIMPLEX, 0.48, (30, 30, 30), 1)
     max_queue = max([int(frame["queue_depth"]) for frame in frames] + [1])
     points = []
@@ -115,7 +151,6 @@ def build_status_timeline(trace: dict[str, Any], width: int = 1600) -> np.ndarra
     elif points:
         cv2.circle(canvas, points[0], 3, (80, 50, 180), -1)
 
-    duration = float(frames[-1]["sim_time_s"]) if frames else 0.0
     cv2.putText(canvas, "0s", (margin_left, height - 15), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (30, 30, 30), 1)
     cv2.putText(
         canvas,

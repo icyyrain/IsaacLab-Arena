@@ -47,6 +47,7 @@ def test_status_timeline_has_one_colored_lane_per_robot_and_queue_plot() -> None
         "num_envs": 6,
         "step_dt": 0.02,
         "frames": [_trace_frame(), {**_trace_frame(), "step": 26, "sim_time_s": 0.52, "queue_depth": 4}],
+        "gpu_service_intervals": [],
     }
 
     timeline = build_status_timeline(trace, width=800)
@@ -54,3 +55,24 @@ def test_status_timeline_has_one_colored_lane_per_robot_and_queue_plot() -> None
     assert timeline.shape[1] == 800
     assert timeline.shape[0] >= 420
     assert np.count_nonzero(timeline) > 0
+
+
+def test_status_timeline_draws_control_time_gpu_service_and_idle() -> None:
+    first = _trace_frame()
+    first["sim_time_s"] = 0.02
+    last = _trace_frame()
+    last["sim_time_s"] = 1.2
+    trace = {
+        "num_envs": 6,
+        "step_dt": 0.02,
+        "frames": [first, last],
+        "gpu_service_intervals": [
+            {"env_id": 0, "start_sim_time_s": 0.2, "finish_sim_time_s": 0.5},
+            {"env_id": 1, "start_sim_time_s": 0.7, "finish_sim_time_s": 0.9},
+        ],
+    }
+
+    timeline = build_status_timeline(trace, width=800)
+
+    for expected_bgr in ((214, 104, 48), (46, 139, 230), (205, 205, 205)):
+        assert np.any(np.all(timeline == expected_bgr, axis=2)), expected_bgr

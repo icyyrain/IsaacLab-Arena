@@ -12,8 +12,10 @@ from types import SimpleNamespace
 
 from isaaclab_arena_environments.galileo_g1_locomanip_pick_and_place_environment import (
     _CLEAN_OVERVIEW_PRIMS_TO_HIDE,
+    _apply_mosaic_camera,
     _apply_overview_camera,
     _hide_background_prims,
+    _use_clean_overview,
 )
 
 
@@ -74,3 +76,33 @@ def test_clean_overview_hides_walls_and_doors() -> None:
         "galileo_locomanip/Structure/walls",
         "galileo_locomanip/Structure/doors",
     )
+
+
+def test_mosaic_video_uses_clean_overview_automatically() -> None:
+    assert _use_clean_overview(SimpleNamespace(clean_overview=False, mosaic_video=True))
+    assert _use_clean_overview(SimpleNamespace(clean_overview=True, mosaic_video=False))
+    assert not _use_clean_overview(SimpleNamespace(clean_overview=False, mosaic_video=False))
+
+
+def test_apply_mosaic_camera_adds_requested_tiled_rgb_sensor() -> None:
+    cfg = SimpleNamespace(scene=SimpleNamespace())
+
+    result = _apply_mosaic_camera(
+        cfg,
+        width=480,
+        height=360,
+        camera_eye=(-2.8, -2.8, 2.0),
+        camera_target=(0.0, 0.0, 0.6),
+    )
+
+    camera = cfg.scene.third_person_camera
+    assert result is cfg
+    assert type(camera).__name__ == "TiledCameraCfg"
+    assert camera.prim_path == "{ENV_REGEX_NS}/Robot/pelvis/ThirdPersonCamera"
+    assert camera.width == 480
+    assert camera.height == 360
+    assert camera.data_types == ["rgb"]
+    assert camera.spawn.focal_length == 20.0
+    assert camera.offset.pos == (-2.8, -2.8, 2.0)
+    assert camera.offset.convention == "opengl"
+    assert camera.offset.rot != (0.0, 0.0, 0.0, 1.0)

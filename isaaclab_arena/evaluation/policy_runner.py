@@ -6,15 +6,24 @@
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import os
+from pathlib import Path
 import torch
 import tqdm
 from gymnasium.wrappers import RecordVideo
 from importlib import import_module
 from typing import TYPE_CHECKING
 
+_H5PY_DLL_DIR_HANDLE = None
+if os.name == "nt":
+    h5py_spec = importlib.util.find_spec("h5py")
+    if h5py_spec is not None and h5py_spec.origin is not None:
+        _H5PY_DLL_DIR_HANDLE = os.add_dll_directory(str(Path(h5py_spec.origin).resolve().parent))
+
 from isaaclab_arena.cli.isaaclab_arena_cli import get_isaaclab_arena_cli_parser
 from isaaclab_arena.evaluation.camera_video import CameraObsVideoRecorder
+from isaaclab_arena.evaluation.mosaic_video import TiledCameraMosaicRecorder
 from isaaclab_arena.evaluation.policy_runner_cli import add_policy_runner_arguments
 from isaaclab_arena.metrics.metrics_logger import metrics_to_plain_python_types
 from isaaclab_arena.utils.hydra_overrides import assert_hydra_overrides
@@ -215,7 +224,7 @@ def main():
         # Optionally wrap with RecordVideo and/or CameraObsVideoRecorder. The two flags
         # are independent: --video records the kit viewport (via env.render()),
         # --camera_video records the embodiment-mounted cameras (from obs["camera_obs"]).
-        if args_cli.video or args_cli.camera_video:
+        if args_cli.video or args_cli.camera_video or args_cli.mosaic_video:
             os.makedirs(args_cli.video_dir, exist_ok=True)
             if num_steps is not None:
                 video_length = num_steps
@@ -248,6 +257,20 @@ def main():
             )
             print(
                 f"[Rank {local_rank}/{world_size}] Recording {video_length}-step per-camera videos to:"
+                f" {args_cli.video_dir}"
+            )
+
+        if args_cli.mosaic_video:
+            env = TiledCameraMosaicRecorder(
+                env,
+                video_folder=args_cli.video_dir,
+                sensor_name="third_person_camera",
+                step_trigger=lambda step: step == 0,
+                video_length=video_length,
+                columns=args_cli.mosaic_columns,
+            )
+            print(
+                f"[Rank {local_rank}/{world_size}] Recording {video_length}-step third-person mosaic to:"
                 f" {args_cli.video_dir}"
             )
 

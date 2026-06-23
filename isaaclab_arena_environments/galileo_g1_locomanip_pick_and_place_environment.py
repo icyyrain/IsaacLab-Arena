@@ -75,6 +75,47 @@ def _apply_overview_camera(env_cfg: Any) -> Any:
     return env_cfg
 
 
+def _use_clean_overview(args_cli: Any) -> bool:
+    """Hide visual walls for either overview recording mode."""
+    return bool(getattr(args_cli, "clean_overview", False) or getattr(args_cli, "mosaic_video", False))
+
+
+def _apply_mosaic_camera(
+    env_cfg: Any,
+    width: int,
+    height: int,
+    camera_eye: tuple[float, float, float],
+    camera_target: tuple[float, float, float],
+) -> Any:
+    """Add an optional batched third-person camera for visualization-only recording."""
+    import isaaclab.sim as sim_utils
+    import torch
+    from isaaclab.sensors import TiledCameraCfg
+    from isaaclab.utils.math import create_rotation_matrix_from_view, quat_from_matrix
+
+    assert width > 0 and height > 0, "mosaic camera dimensions must be positive"
+    eyes = torch.tensor([camera_eye], dtype=torch.float32)
+    targets = torch.tensor([camera_target], dtype=torch.float32)
+    rotation = tuple(quat_from_matrix(create_rotation_matrix_from_view(eyes, targets, up_axis="Z"))[0].tolist())
+    env_cfg.scene.third_person_camera = TiledCameraCfg(
+        prim_path="{ENV_REGEX_NS}/Robot/pelvis/ThirdPersonCamera",
+        update_period=0.0,
+        width=width,
+        height=height,
+        data_types=["rgb"],
+        spawn=sim_utils.PinholeCameraCfg(
+            focal_length=20.0,
+            clipping_range=(0.1, 100.0),
+        ),
+        offset=TiledCameraCfg.OffsetCfg(
+            pos=tuple(camera_eye),
+            rot=rotation,
+            convention="opengl",
+        ),
+    )
+    return env_cfg
+
+
 def _hide_background_prims(env, env_ids, prim_relative_paths: tuple[str, ...]) -> None:
     """Hide selected background prims while preserving their physics state."""
     from pxr import UsdGeom
@@ -171,13 +212,21 @@ class GalileoG1LocomanipPickAndPlaceEnvironment(ExampleEnvironmentBase):
             )
             if args_cli.overview_camera:
                 env_cfg = _apply_overview_camera(env_cfg)
-            if args_cli.clean_overview:
+            if _use_clean_overview(args_cli):
                 from isaaclab.managers import EventTermCfg
 
                 env_cfg.events.hide_clean_overview_prims = EventTermCfg(
                     func=_hide_background_prims,
                     mode="prestartup",
                     params={"prim_relative_paths": _CLEAN_OVERVIEW_PRIMS_TO_HIDE},
+                )
+            if getattr(args_cli, "mosaic_video", False):
+                env_cfg = _apply_mosaic_camera(
+                    env_cfg,
+                    width=args_cli.mosaic_camera_width,
+                    height=args_cli.mosaic_camera_height,
+                    camera_eye=tuple(args_cli.mosaic_camera_eye),
+                    camera_target=tuple(args_cli.mosaic_camera_target),
                 )
             return env_cfg
 

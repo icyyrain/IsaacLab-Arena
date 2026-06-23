@@ -72,6 +72,7 @@ def build_async_trace(
     step_dt: float,
     deadline_window_s: float,
     frames: list[dict[str, Any]],
+    gpu_service_intervals: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Build the versioned per-control-step trace consumed by visualization tools."""
     return {
@@ -81,6 +82,7 @@ def build_async_trace(
         "deadline_window_sim_s": deadline_window_s,
         "frame_count": len(frames),
         "frames": frames,
+        "gpu_service_intervals": list(gpu_service_intervals or []),
     }
 
 

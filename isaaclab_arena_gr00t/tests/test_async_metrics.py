@@ -77,11 +77,23 @@ def test_async_trace_preserves_per_step_robot_state(tmp_path) -> None:
         step_dt=0.02,
         deadline_window_s=0.5,
         frames=frames,
+        gpu_service_intervals=[
+            {
+                "env_id": 0,
+                "generation": 0,
+                "sequence": 0,
+                "submit_sim_time_s": 0.5,
+                "start_sim_time_s": 0.5,
+                "finish_sim_time_s": 0.63,
+                "inference_wall_s": 0.13,
+            }
+        ],
     )
 
     assert trace["schema_version"] == 1
     assert trace["frame_count"] == 1
     assert trace["frames"][0]["robots"][0]["deadline_remaining_sim_s"] == 0.48
+    assert trace["gpu_service_intervals"][0]["finish_sim_time_s"] == 0.63
 
     path = tmp_path / "trace.json"
     write_async_trace(path, trace)

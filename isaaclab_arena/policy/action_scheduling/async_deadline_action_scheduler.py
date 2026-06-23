@@ -84,6 +84,7 @@ class AsyncDeadlineActionScheduler:
         self._hold_steps = torch.zeros(num_envs, dtype=torch.int64)
         self._inference_wall_s: list[list[float]] = [[] for _ in range(num_envs)]
         self._virtual_queue_wait_s: list[list[float]] = [[] for _ in range(num_envs)]
+        self._gpu_service_intervals: list[dict[str, int | float]] = []
         self.statuses = [AsyncEnvStatus.BOOTSTRAP for _ in range(num_envs)]
 
     @property
@@ -227,6 +228,17 @@ class AsyncDeadlineActionScheduler:
         self._request_outstanding[env_id] = False
         self._inference_wall_s[env_id].append(inference_wall_s)
         self._virtual_queue_wait_s[env_id].append(virtual_start_s - request.submit_sim_time_s)
+        self._gpu_service_intervals.append(
+            {
+                "env_id": env_id,
+                "generation": request.generation,
+                "sequence": request.sequence,
+                "submit_sim_time_s": round(request.submit_sim_time_s, 9),
+                "start_sim_time_s": round(virtual_start_s, 9),
+                "finish_sim_time_s": round(virtual_finish_s, 9),
+                "inference_wall_s": round(inference_wall_s, 9),
+            }
+        )
         self.statuses[env_id] = AsyncEnvStatus.GATED
         return True
 
@@ -273,5 +285,6 @@ class AsyncDeadlineActionScheduler:
             "deadline_count": int(self._deadline_count.sum().item()),
             "deadline_miss_count": int(self._deadline_miss_count.sum().item()),
             "hold_steps": int(self._hold_steps.sum().item()),
+            "gpu_service_intervals": [dict(interval) for interval in self._gpu_service_intervals],
             "per_env": per_env,
         }

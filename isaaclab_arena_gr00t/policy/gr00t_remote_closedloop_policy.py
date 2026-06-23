@@ -521,6 +521,7 @@ class Gr00tRemoteClosedloopPolicy(PolicyBase):
                         step_dt=self.config.async_step_dt,
                         deadline_window_s=float(metrics["deadline_window_sim_s"]),
                         frames=self._async_trace_frames,
+                        gpu_service_intervals=self._async_scheduler.metrics()["gpu_service_intervals"],
                     )
                     write_async_trace(self.config.async_trace_path, trace)
             if self._async_status_window is not None:

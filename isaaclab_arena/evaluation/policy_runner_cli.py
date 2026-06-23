@@ -55,3 +55,15 @@ def add_policy_runner_arguments(parser: argparse.ArgumentParser) -> None:
             " Independent of --video; use either or both."
         ),
     )
+    parser.add_argument(
+        "--mosaic_video",
+        "--mosaic-video",
+        action="store_true",
+        default=False,
+        help="Record one row-major MP4 from a batched third-person scene camera.",
+    )
+    parser.add_argument("--mosaic_camera_width", type=int, default=480)
+    parser.add_argument("--mosaic_camera_height", type=int, default=360)
+    parser.add_argument("--mosaic_columns", type=int, default=3)
+    parser.add_argument("--mosaic_camera_eye", type=float, nargs=3, default=[-2.2, -2.2, 1.7])
+    parser.add_argument("--mosaic_camera_target", type=float, nargs=3, default=[0.0, 0.0, 0.6])
