@@ -379,10 +379,16 @@ countdown for every control step.
 
 ### Third-person mosaic demo
 
-Use `--mosaic_video` to record one pelvis-relative third-person camera per robot as a 3x2 mosaic. The
+Use `--mosaic_video` to record one third-person camera per robot as a 3x2 mosaic. The
 Galileo wall and door render geometry is hidden automatically for this recording mode; collision and
 physics are unchanged. The observer cameras add rendering work, so this is a visualization run, not a
 capacity benchmark.
+
+The default `--mosaic_camera_mode planar` follows pelvis X/Y through a `0.25 s` low-pass filter and a
+`0.02 m` deadband while keeping camera height and orientation fixed. Use `--mosaic_camera_mode fixed`
+for a completely stationary workcell camera, or `--mosaic_camera_mode pelvis` for the previous close
+camera that inherits full pelvis translation and rotation. Planar tuning is available through
+`--mosaic_camera_follow_tau` and `--mosaic_camera_follow_deadband`.
 
 ```powershell
 & C:\Isaac\envs\arena-py311\python.exe `

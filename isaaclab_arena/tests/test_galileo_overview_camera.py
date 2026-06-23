@@ -10,6 +10,8 @@ from __future__ import annotations
 import sys
 from types import SimpleNamespace
 
+import pytest
+
 from isaaclab_arena_environments.galileo_g1_locomanip_pick_and_place_environment import (
     _CLEAN_OVERVIEW_PRIMS_TO_HIDE,
     _apply_mosaic_camera,
@@ -93,6 +95,7 @@ def test_apply_mosaic_camera_adds_requested_tiled_rgb_sensor() -> None:
         height=360,
         camera_eye=(-2.8, -2.8, 2.0),
         camera_target=(0.0, 0.0, 0.6),
+        camera_mode="pelvis",
     )
 
     camera = cfg.scene.third_person_camera
@@ -106,3 +109,26 @@ def test_apply_mosaic_camera_adds_requested_tiled_rgb_sensor() -> None:
     assert camera.offset.pos == (-2.8, -2.8, 2.0)
     assert camera.offset.convention == "opengl"
     assert camera.offset.rot != (0.0, 0.0, 0.0, 1.0)
+
+
+@pytest.mark.parametrize(
+    ("mode", "expected_path"),
+    [
+        ("fixed", "{ENV_REGEX_NS}/ThirdPersonCamera"),
+        ("planar", "{ENV_REGEX_NS}/ThirdPersonCamera"),
+        ("pelvis", "{ENV_REGEX_NS}/Robot/pelvis/ThirdPersonCamera"),
+    ],
+)
+def test_apply_mosaic_camera_selects_mode_specific_prim_path(mode: str, expected_path: str) -> None:
+    cfg = SimpleNamespace(scene=SimpleNamespace())
+
+    _apply_mosaic_camera(
+        cfg,
+        width=480,
+        height=360,
+        camera_eye=(-2.2, -2.2, 1.7),
+        camera_target=(0.0, 0.0, 0.6),
+        camera_mode=mode,
+    )
+
+    assert cfg.scene.third_person_camera.prim_path == expected_path

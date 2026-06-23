@@ -86,6 +86,7 @@ def _apply_mosaic_camera(
     height: int,
     camera_eye: tuple[float, float, float],
     camera_target: tuple[float, float, float],
+    camera_mode: str,
 ) -> Any:
     """Add an optional batched third-person camera for visualization-only recording."""
     import isaaclab.sim as sim_utils
@@ -94,11 +95,17 @@ def _apply_mosaic_camera(
     from isaaclab.utils.math import create_rotation_matrix_from_view, quat_from_matrix
 
     assert width > 0 and height > 0, "mosaic camera dimensions must be positive"
+    assert camera_mode in ("fixed", "planar", "pelvis"), f"unsupported mosaic camera mode: {camera_mode}"
+    prim_path = (
+        "{ENV_REGEX_NS}/Robot/pelvis/ThirdPersonCamera"
+        if camera_mode == "pelvis"
+        else "{ENV_REGEX_NS}/ThirdPersonCamera"
+    )
     eyes = torch.tensor([camera_eye], dtype=torch.float32)
     targets = torch.tensor([camera_target], dtype=torch.float32)
     rotation = tuple(quat_from_matrix(create_rotation_matrix_from_view(eyes, targets, up_axis="Z"))[0].tolist())
     env_cfg.scene.third_person_camera = TiledCameraCfg(
-        prim_path="{ENV_REGEX_NS}/Robot/pelvis/ThirdPersonCamera",
+        prim_path=prim_path,
         update_period=0.0,
         width=width,
         height=height,
@@ -227,6 +234,7 @@ class GalileoG1LocomanipPickAndPlaceEnvironment(ExampleEnvironmentBase):
                     height=args_cli.mosaic_camera_height,
                     camera_eye=tuple(args_cli.mosaic_camera_eye),
                     camera_target=tuple(args_cli.mosaic_camera_target),
+                    camera_mode=args_cli.mosaic_camera_mode,
                 )
             return env_cfg
 

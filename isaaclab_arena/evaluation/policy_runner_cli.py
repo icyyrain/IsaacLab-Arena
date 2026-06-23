@@ -65,5 +65,12 @@ def add_policy_runner_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--mosaic_camera_width", type=int, default=480)
     parser.add_argument("--mosaic_camera_height", type=int, default=360)
     parser.add_argument("--mosaic_columns", type=int, default=3)
+    parser.add_argument(
+        "--mosaic_camera_mode",
+        choices=("fixed", "planar", "pelvis"),
+        default="planar",
+    )
     parser.add_argument("--mosaic_camera_eye", type=float, nargs=3, default=[-2.2, -2.2, 1.7])
     parser.add_argument("--mosaic_camera_target", type=float, nargs=3, default=[0.0, 0.0, 0.6])
+    parser.add_argument("--mosaic_camera_follow_tau", type=float, default=0.25)
+    parser.add_argument("--mosaic_camera_follow_deadband", type=float, default=0.02)

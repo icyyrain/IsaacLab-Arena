@@ -268,6 +268,11 @@ def main():
                 step_trigger=lambda step: step == 0,
                 video_length=video_length,
                 columns=args_cli.mosaic_columns,
+                camera_mode=args_cli.mosaic_camera_mode,
+                camera_eye=tuple(args_cli.mosaic_camera_eye),
+                camera_target=tuple(args_cli.mosaic_camera_target),
+                follow_tau=args_cli.mosaic_camera_follow_tau,
+                follow_deadband=args_cli.mosaic_camera_follow_deadband,
             )
             print(
                 f"[Rank {local_rank}/{world_size}] Recording {video_length}-step third-person mosaic to:"

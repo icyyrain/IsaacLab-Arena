@@ -17,6 +17,30 @@ import numpy as np
 import torch
 
 
+def _as_torch_tensor(value) -> torch.Tensor:
+    if isinstance(value, torch.Tensor):
+        return value
+    import warp as wp
+
+    return wp.to_torch(value)
+
+
+def _smooth_planar_xy(
+    current_xy: torch.Tensor,
+    desired_xy: torch.Tensor,
+    dt: float,
+    tau: float,
+    deadband: float,
+) -> torch.Tensor:
+    """Smooth planar camera translation while suppressing small gait motion."""
+    assert current_xy.shape == desired_xy.shape and current_xy.shape[-1] == 2
+    assert dt > 0.0 and tau > 0.0 and deadband >= 0.0
+    delta = desired_xy - current_xy
+    should_move = torch.linalg.vector_norm(delta, dim=-1, keepdim=True) > deadband
+    alpha = 1.0 - math.exp(-dt / tau)
+    return torch.where(should_move, current_xy + alpha * delta, current_xy)
+
+
 def _to_uint8_rgb(frames: torch.Tensor | np.ndarray) -> np.ndarray:
     if isinstance(frames, torch.Tensor):
         frames = frames.detach().cpu().numpy()
@@ -86,18 +110,25 @@ class TiledCameraMosaicRecorder(gym.Wrapper):
         step_trigger: Callable[[int], bool],
         video_length: int,
         columns: int = 3,
+        camera_mode: str = "pelvis",
+        camera_eye: tuple[float, float, float] | None = None,
+        camera_target: tuple[float, float, float] | None = None,
+        follow_tau: float = 0.25,
+        follow_deadband: float = 0.02,
         name_prefix: str = "third-person-mosaic",
         fps: int | None = None,
     ) -> None:
         super().__init__(env)
         assert columns > 0, "mosaic columns must be positive"
         assert video_length > 0, "mosaic video length must be positive"
+        assert camera_mode in ("fixed", "planar", "pelvis"), f"unsupported mosaic camera mode: {camera_mode}"
         os.makedirs(video_folder, exist_ok=True)
         self.video_folder = video_folder
         self.sensor_name = sensor_name
         self.step_trigger = step_trigger
         self.video_length = video_length
         self.columns = columns
+        self.camera_mode = camera_mode
         self.name_prefix = name_prefix
         self.fps = fps if fps is not None else int(env.metadata.get("render_fps", 30))
         self.step_id = -1
@@ -110,8 +141,53 @@ class TiledCameraMosaicRecorder(gym.Wrapper):
             self.sensor = scene[sensor_name]
         except KeyError as exc:
             raise AssertionError(f"mosaic camera sensor '{sensor_name}' is missing from the scene") from exc
+        if camera_mode == "planar":
+            assert camera_eye is not None and camera_target is not None, "planar camera requires eye and target offsets"
+            assert follow_tau > 0.0, "mosaic camera follow tau must be positive"
+            assert follow_deadband >= 0.0, "mosaic camera follow deadband must be non-negative"
+            self.robot = scene["robot"]
+            self.pelvis_body_index = self.robot.body_names.index("pelvis")
+            self.env_origins = scene.env_origins
+            self.camera_eye = torch.tensor(camera_eye, device=self.env_origins.device, dtype=self.env_origins.dtype)
+            self.camera_target = torch.tensor(
+                camera_target,
+                device=self.env_origins.device,
+                dtype=self.env_origins.dtype,
+            )
+            self.follow_tau = follow_tau
+            self.follow_deadband = follow_deadband
+            self.step_dt = float(env.unwrapped.step_dt)
+            self.filtered_pelvis_xy: torch.Tensor | None = None
+            self._update_planar_camera(reset=True)
+
+    def _update_planar_camera(self, reset: bool = False) -> None:
+        body_link_state_w = _as_torch_tensor(self.robot.data.body_link_state_w)
+        desired_xy = body_link_state_w[:, self.pelvis_body_index, :2]
+        if reset or self.filtered_pelvis_xy is None:
+            self.filtered_pelvis_xy = desired_xy.clone()
+        else:
+            self.filtered_pelvis_xy = _smooth_planar_xy(
+                self.filtered_pelvis_xy,
+                desired_xy,
+                dt=self.step_dt,
+                tau=self.follow_tau,
+                deadband=self.follow_deadband,
+            )
+        eyes = self.env_origins + self.camera_eye
+        targets = self.env_origins + self.camera_target
+        eyes[:, :2] = self.filtered_pelvis_xy + self.camera_eye[:2]
+        targets[:, :2] = self.filtered_pelvis_xy + self.camera_target[:2]
+        self.sensor.set_world_poses_from_view(eyes, targets)
+
+    def reset(self, **kwargs):
+        result = self.env.reset(**kwargs)
+        if self.camera_mode == "planar":
+            self._update_planar_camera(reset=True)
+        return result
 
     def step(self, action):
+        if self.camera_mode == "planar":
+            self._update_planar_camera()
         result = self.env.step(action)
         self.step_id += 1
         if not self.recording and self.step_trigger(self.step_id):
