@@ -177,7 +177,15 @@ class TiledCameraMosaicRecorder(gym.Wrapper):
         targets = self.env_origins + self.camera_target
         eyes[:, :2] = self.filtered_pelvis_xy + self.camera_eye[:2]
         targets[:, :2] = self.filtered_pelvis_xy + self.camera_target[:2]
-        self.sensor.set_world_poses_from_view(eyes, targets)
+        from isaaclab.utils.math import create_rotation_matrix_from_view, quat_from_matrix
+
+        orientations = quat_from_matrix(
+            create_rotation_matrix_from_view(eyes, targets, up_axis="Z", device=str(eyes.device))
+        )
+        self.sensor._view.set_local_poses(
+            translations=eyes - self.env_origins,
+            orientations=orientations,
+        )
 
     def reset(self, **kwargs):
         result = self.env.reset(**kwargs)

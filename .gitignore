@@ -82,6 +82,7 @@ TAGS
 # Local evaluation and agent scratch artifacts
 /eval/
 /.superpowers/
+/project_analysis_reports/
 
 # Ignore plots
 isaaclab_arena/tests/**.png

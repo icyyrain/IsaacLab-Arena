@@ -105,9 +105,18 @@ def test_as_torch_tensor_converts_warp_backed_state(monkeypatch) -> None:
     assert actual is expected
 
 
+class _FakeView:
+    def __init__(self) -> None:
+        self.local_pose_updates = []
+
+    def set_local_poses(self, translations, orientations) -> None:
+        self.local_pose_updates.append((translations.clone(), orientations.clone()))
+
+
 class _FakeSensor:
     def __init__(self) -> None:
         self.data = SimpleNamespace(output={"rgb": torch.zeros(2, 6, 8, 4)})
+        self._view = _FakeView()
         self.pose_updates = []
 
     def set_world_poses_from_view(self, eyes, targets) -> None:
@@ -193,17 +202,18 @@ def test_planar_recorder_translates_eye_and_target_without_rotating(tmp_path) ->
         follow_tau=0.25,
         follow_deadband=0.0,
     )
-    initial_eyes, initial_targets = env.sensor.pose_updates[-1]
-    torch.testing.assert_close(initial_eyes, torch.tensor([[-2.2, -2.0, 1.7], [7.8, 18.0, 1.7]]))
-    torch.testing.assert_close(initial_targets, torch.tensor([[0.0, 0.2, 0.6], [10.0, 20.2, 0.6]]))
+    initial_translations, initial_orientations = env.sensor._view.local_pose_updates[-1]
+    torch.testing.assert_close(initial_translations, torch.tensor([[-2.2, -2.0, 1.7], [-2.2, -2.0, 1.7]]))
+    torch.testing.assert_close(initial_orientations[0], initial_orientations[1])
 
     env.scene.robot.data.body_link_state_w[:, 0, 0] += 1.0
     recorder.step(None)
 
-    moved_eyes, moved_targets = env.sensor.pose_updates[-1]
+    moved_translations, moved_orientations = env.sensor._view.local_pose_updates[-1]
     expected_delta = 1.0 - math.exp(-env.step_dt / 0.25)
-    torch.testing.assert_close(moved_eyes[:, 0], initial_eyes[:, 0] + expected_delta)
-    torch.testing.assert_close(moved_targets - moved_eyes, initial_targets - initial_eyes)
+    torch.testing.assert_close(moved_translations[:, 0], initial_translations[:, 0] + expected_delta)
+    torch.testing.assert_close(moved_orientations, initial_orientations)
+    assert env.sensor.pose_updates == []
 
 
 def test_planar_recorder_reset_snaps_to_current_pelvis_position(tmp_path) -> None:
@@ -225,8 +235,31 @@ def test_planar_recorder_reset_snaps_to_current_pelvis_position(tmp_path) -> Non
 
     recorder.reset()
 
-    eyes, _ = env.sensor.pose_updates[-1]
-    torch.testing.assert_close(eyes[:, 0], torch.tensor([2.8, 12.8]))
+    translations, _ = env.sensor._view.local_pose_updates[-1]
+    torch.testing.assert_close(translations[:, 0], torch.tensor([2.8, 2.8]))
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is required for device consistency coverage")
+def test_planar_recorder_supports_cuda_scene_tensors(tmp_path) -> None:
+    env = _FakeEnv()
+    env.scene.env_origins = env.scene.env_origins.cuda()
+    env.scene.robot.data.body_link_state_w = env.scene.robot.data.body_link_state_w.cuda()
+
+    TiledCameraMosaicRecorder(
+        env,
+        video_folder=str(tmp_path),
+        sensor_name="third_person_camera",
+        step_trigger=lambda step: False,
+        video_length=2,
+        columns=2,
+        camera_mode="planar",
+        camera_eye=(-2.2, -2.2, 1.7),
+        camera_target=(0.0, 0.0, 0.6),
+    )
+
+    translations, orientations = env.sensor._view.local_pose_updates[-1]
+    assert translations.device.type == "cuda"
+    assert orientations.device.type == "cuda"
 
 
 def test_mosaic_recorder_rejects_missing_scene_sensor(tmp_path) -> None:
