@@ -284,6 +284,26 @@ deadline window = async_prefetch_lead_steps * async_step_dt
 default measured window = 25 * 0.02 s = 0.5 simulated seconds
 ```
 
+By default the async scheduler preserves the original latency-hiding behavior: a prefetched action
+horizon is executed from index `0` after the current chunk drains. For time-aligned prefetching, use
+`--async_time_aligned`; it derives `action_start_offset_steps = async_prefetch_lead_steps` and
+`async_action_chunk_length = action_horizon - async_prefetch_lead_steps`. With the local G1 GR00T
+policy (`action_horizon=50`), a 10-step lead skips the stale 0.2 simulated-second prefix and executes
+the remaining 40 steps:
+
+```powershell
+--async_time_aligned `
+--async_prefetch_lead_steps 10 `
+--async_step_dt 0.02
+```
+
+The manual `--async_action_start_offset_steps` and `--async_action_chunk_length` flags remain
+available for ablations, but normal aligned runs should only need the mode flag and lead.
+
+When a deadline is missed, the default hold behavior is `--async_hold_mode last_action`, which
+repeats the last action target that was actually sent to the simulator. For an ablation that follows
+the robot's current simulated joint positions instead, use `--async_hold_mode current_joint`.
+
 Set the runtime environment in PowerShell:
 
 ```powershell

@@ -47,11 +47,16 @@ class AsyncDeadlineActionScheduler:
         step_dt: float,
         prefetch_lead_steps: int,
         device: str | torch.device,
+        action_start_offset_steps: int = 0,
         dtype: torch.dtype = torch.float32,
     ) -> None:
         assert num_envs > 0, "num_envs must be positive"
         assert action_horizon >= action_chunk_length > 0, "action horizon must cover the executed chunk"
         assert 1 <= prefetch_lead_steps <= action_chunk_length, "prefetch lead must fit inside the chunk"
+        assert action_start_offset_steps >= 0, "action_start_offset_steps must be non-negative"
+        assert (
+            action_start_offset_steps + action_chunk_length <= action_horizon
+        ), "action_start_offset_steps + action_chunk_length must fit inside action_horizon"
         assert step_dt > 0.0, "step_dt must be positive"
 
         self.num_envs = num_envs
@@ -60,6 +65,7 @@ class AsyncDeadlineActionScheduler:
         self.action_dim = action_dim
         self.step_dt = step_dt
         self.prefetch_lead_steps = prefetch_lead_steps
+        self.action_start_offset_steps = action_start_offset_steps
         self.device = torch.device(device)
         self.dtype = dtype
 
@@ -222,7 +228,11 @@ class AsyncDeadlineActionScheduler:
         virtual_start_s = max(request.submit_sim_time_s, self._virtual_gpu_available_s)
         virtual_finish_s = virtual_start_s + inference_wall_s + network_delay_s
         self._virtual_gpu_available_s = virtual_finish_s
-        self.next_action_chunk[env_id] = chunk.to(device=self.device, dtype=self.dtype)
+        offset = self.action_start_offset_steps
+        self.next_action_chunk[env_id] = 0.0
+        self.next_action_chunk[env_id, : self.action_chunk_length] = chunk[
+            offset : offset + self.action_chunk_length
+        ].to(device=self.device, dtype=self.dtype)
         self._next_virtual_finish_s[env_id] = virtual_finish_s
         self._next_available[env_id] = True
         self._request_outstanding[env_id] = False
@@ -281,6 +291,7 @@ class AsyncDeadlineActionScheduler:
             "num_envs": self.num_envs,
             "sim_time_s": self.sim_time_s,
             "deadline_window_s": self.prefetch_lead_steps * self.step_dt,
+            "action_start_offset_steps": self.action_start_offset_steps,
             "request_count": int(self._request_count.sum().item()),
             "deadline_count": int(self._deadline_count.sum().item()),
             "deadline_miss_count": int(self._deadline_miss_count.sum().item()),

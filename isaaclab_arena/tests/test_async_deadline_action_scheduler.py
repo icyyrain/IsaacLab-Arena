@@ -14,14 +14,21 @@ import pytest
 from isaaclab_arena.policy.action_scheduling import AsyncDeadlineActionScheduler, AsyncEnvStatus
 
 
-def _make_scheduler(num_envs: int = 1) -> AsyncDeadlineActionScheduler:
+def _make_scheduler(
+    num_envs: int = 1,
+    action_chunk_length: int = 50,
+    action_horizon: int = 50,
+    prefetch_lead_steps: int = 25,
+    action_start_offset_steps: int = 0,
+) -> AsyncDeadlineActionScheduler:
     return AsyncDeadlineActionScheduler(
         num_envs=num_envs,
-        action_chunk_length=50,
-        action_horizon=50,
+        action_chunk_length=action_chunk_length,
+        action_horizon=action_horizon,
         action_dim=2,
         step_dt=0.02,
-        prefetch_lead_steps=25,
+        prefetch_lead_steps=prefetch_lead_steps,
+        action_start_offset_steps=action_start_offset_steps,
         device="cpu",
     )
 
@@ -78,6 +85,39 @@ def test_holds_at_boundary_until_virtual_completion_then_resumes() -> None:
     assert metrics["deadline_miss_count"] == 1
     assert metrics["hold_steps"] == 5
     assert metrics["deadline_window_s"] == 0.5
+
+
+def test_accept_result_skips_prefetch_lead_when_start_offset_is_configured() -> None:
+    scheduler = _make_scheduler(
+        action_chunk_length=50,
+        action_horizon=75,
+        prefetch_lead_steps=25,
+        action_start_offset_steps=25,
+    )
+    scheduler.bootstrap(torch.zeros(1, 75, 2))
+
+    for _ in range(26):
+        scheduler.step(torch.zeros(1, 2))
+    request = scheduler.take_pending_requests()[0]
+
+    predicted_chunk = torch.arange(150, dtype=torch.float32).reshape(75, 2)
+    assert scheduler.accept_result(request, predicted_chunk, inference_wall_s=0.1)
+
+    for _ in range(24):
+        scheduler.step(torch.zeros(1, 2))
+    torch.testing.assert_close(scheduler.step(torch.zeros(1, 2))[0], predicted_chunk[25])
+    torch.testing.assert_close(scheduler.step(torch.zeros(1, 2))[0], predicted_chunk[26])
+    assert scheduler.metrics()["action_start_offset_steps"] == 25
+
+
+def test_start_offset_requires_enough_action_horizon() -> None:
+    with pytest.raises(AssertionError, match="action_start_offset_steps \\+ action_chunk_length"):
+        _make_scheduler(
+            action_chunk_length=50,
+            action_horizon=50,
+            prefetch_lead_steps=25,
+            action_start_offset_steps=25,
+        )
 
 
 def test_virtual_gpu_timeline_serializes_same_time_requests() -> None:

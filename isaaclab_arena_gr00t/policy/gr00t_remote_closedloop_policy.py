@@ -69,11 +69,47 @@ class Gr00tRemoteClosedloopPolicyArgs(Gr00tBasePolicyArgs):
     remote_port: int = field(default=5555, metadata={"help": "GR00T policy server port"})
     remote_api_token: str | None = field(default=None, metadata={"help": "API token for the policy server"})
     async_prefetch_lead_steps: int = field(default=25, metadata={"help": "Control steps reserved for prefetch"})
+    async_time_aligned: bool = field(
+        default=False,
+        metadata={
+            "help": (
+                "Automatically skip the stale prefix of async policy horizons. When enabled, the start offset"
+                " defaults to async_prefetch_lead_steps and the executed chunk length defaults to"
+                " action_horizon - async_prefetch_lead_steps."
+            )
+        },
+    )
+    async_action_chunk_length: int | None = field(
+        default=None,
+        metadata={
+            "help": (
+                "Optional number of action steps to execute per async chunk. Defaults to the policy config's"
+                " action_chunk_length."
+            )
+        },
+    )
+    async_action_start_offset_steps: int = field(
+        default=0,
+        metadata={
+            "help": (
+                "Number of leading policy-horizon action steps to skip before storing an async prefetch result."
+            )
+        },
+    )
     async_step_dt: float = field(default=0.02, metadata={"help": "Control-time duration of one action step"})
     async_network_delay_s: float = field(default=0.0, metadata={"help": "Virtual one-way response delay"})
     async_metrics_path: str | None = field(default=None, metadata={"help": "Optional async metrics JSON path"})
     async_trace_path: str | None = field(default=None, metadata={"help": "Optional per-step async trace JSON path"})
     async_status_ui: bool = field(default=True, metadata={"help": "Show the Kit async status window"})
+    async_hold_mode: str = field(
+        default="last_action",
+        metadata={
+            "help": (
+                "Action to apply while async_edf waits for a missed chunk: 'current_joint' rebuilds a"
+                " target from current sim joint positions; 'last_action' repeats the last target sent to sim."
+            )
+        },
+    )
 
     @classmethod
     def from_cli_args(cls, args: argparse.Namespace) -> Gr00tRemoteClosedloopPolicyArgs:
@@ -86,11 +122,15 @@ class Gr00tRemoteClosedloopPolicyArgs(Gr00tBasePolicyArgs):
             remote_port=args.remote_port,
             remote_api_token=getattr(args, "remote_api_token", None),
             async_prefetch_lead_steps=getattr(args, "async_prefetch_lead_steps", 25),
+            async_time_aligned=getattr(args, "async_time_aligned", False),
+            async_action_chunk_length=getattr(args, "async_action_chunk_length", None),
+            async_action_start_offset_steps=getattr(args, "async_action_start_offset_steps", 0),
             async_step_dt=getattr(args, "async_step_dt", 0.02),
             async_network_delay_s=getattr(args, "async_network_delay_s", 0.0),
             async_metrics_path=getattr(args, "async_metrics_path", None),
             async_trace_path=getattr(args, "async_trace_path", None),
             async_status_ui=getattr(args, "async_status_ui", True),
+            async_hold_mode=getattr(args, "async_hold_mode", "last_action"),
         )
 
 
@@ -141,6 +181,15 @@ class Gr00tRemoteClosedloopPolicy(PolicyBase):
         # Action / chunk shapes
         self.action_dim = compute_action_dim(self.task_mode, self.robot_action_joints_config)
         self.action_chunk_length = self.policy_config.action_chunk_length
+        async_action_start_offset_steps = config.async_action_start_offset_steps
+        async_action_chunk_length = config.async_action_chunk_length
+        if config.async_time_aligned:
+            if async_action_start_offset_steps == 0:
+                async_action_start_offset_steps = config.async_prefetch_lead_steps
+            if async_action_chunk_length is None:
+                async_action_chunk_length = self.policy_config.action_horizon - async_action_start_offset_steps
+        self.async_action_start_offset_steps = async_action_start_offset_steps
+        self.async_action_chunk_length = async_action_chunk_length or self.action_chunk_length
 
         self._scheduler_mode = scheduler_mode or "chunk"
         self._chunking_state: ActionScheduler | None = None
@@ -159,18 +208,28 @@ class Gr00tRemoteClosedloopPolicy(PolicyBase):
 
         if self._scheduler_mode == "async_edf":
             assert (
-                1 <= config.async_prefetch_lead_steps <= self.action_chunk_length
+                1 <= config.async_prefetch_lead_steps <= self.async_action_chunk_length
             ), "async prefetch lead must be between one and action_chunk_length"
+            assert self.async_action_chunk_length > 0, "async_action_chunk_length must be positive"
+            assert self.async_action_start_offset_steps >= 0, "async_action_start_offset_steps must be non-negative"
+            assert (
+                self.async_action_start_offset_steps + self.async_action_chunk_length
+                <= self.policy_config.action_horizon
+            ), (
+                "async_action_start_offset_steps + async_action_chunk_length must fit inside action_horizon. "
+                "For the common case, use --async_time_aligned and set only --async_prefetch_lead_steps."
+            )
             assert config.async_step_dt > 0.0, "async_step_dt must be positive"
             assert config.async_network_delay_s >= 0.0, "async_network_delay_s must be non-negative"
             self._async_scheduler = AsyncDeadlineActionScheduler(
                 num_envs=self.num_envs,
-                action_chunk_length=self.action_chunk_length,
+                action_chunk_length=self.async_action_chunk_length,
                 action_horizon=self.policy_config.action_horizon,
                 action_dim=self.action_dim,
                 step_dt=config.async_step_dt,
                 prefetch_lead_steps=config.async_prefetch_lead_steps,
                 device=self.device,
+                action_start_offset_steps=self.async_action_start_offset_steps,
                 dtype=torch.float,
             )
             self._async_worker = Gr00tAsyncInferenceWorker(client_factory=client_factory)
@@ -199,6 +258,12 @@ class Gr00tRemoteClosedloopPolicy(PolicyBase):
         self._timing_last_chunk_fetch_end: float | None = None
         self._async_rollout_wall_start: float | None = None
         self._async_trace_frames: list[dict[str, Any]] = []
+        self._last_action_target: torch.Tensor | None = None
+
+        assert config.async_hold_mode in {
+            "current_joint",
+            "last_action",
+        }, "async_hold_mode must be 'current_joint' or 'last_action'"
 
     # ---------------------- CLI helpers -------------------
 
@@ -241,11 +306,43 @@ class Gr00tRemoteClosedloopPolicy(PolicyBase):
             ),
         )
         group.add_argument("--async_prefetch_lead_steps", type=int, default=25)
+        group.add_argument(
+            "--async_time_aligned",
+            action="store_true",
+            help=(
+                "Derive async offset/chunk from the prefetch lead: offset=lead and chunk=action_horizon-lead."
+            ),
+        )
+        group.add_argument(
+            "--async_action_chunk_length",
+            type=int,
+            default=None,
+            help=(
+                "Optional executed chunk length for async_edf. Use with --async_action_start_offset_steps when"
+                " skipping the stale prefix of a policy horizon."
+            ),
+        )
+        group.add_argument(
+            "--async_action_start_offset_steps",
+            type=int,
+            default=0,
+            help="Leading action steps to skip from each async prefetch result before execution.",
+        )
         group.add_argument("--async_step_dt", type=float, default=0.02)
         group.add_argument("--async_network_delay_s", type=float, default=0.0)
         group.add_argument("--async_metrics_path", type=str, default=None)
         group.add_argument("--async_trace_path", type=str, default=None)
         group.add_argument("--async_status_ui", action=argparse.BooleanOptionalAction, default=True)
+        group.add_argument(
+            "--async_hold_mode",
+            type=str,
+            default="last_action",
+            choices=["current_joint", "last_action"],
+            help=(
+                "Hold action used by async_edf when a deadline is missed. 'last_action' repeats the last"
+                " action target sent to sim; 'current_joint' rebuilds a target from current sim joints."
+            ),
+        )
         return parser
 
     @staticmethod
@@ -306,6 +403,7 @@ class Gr00tRemoteClosedloopPolicy(PolicyBase):
             self._async_rollout_wall_start = time.perf_counter()
 
         action = self._async_scheduler.step(self._extract_hold_action(observation))
+        self._last_action_target = action.detach().clone()
         pending_requests = self._async_scheduler.take_pending_requests()
         if pending_requests:
             if policy_observations is None:
@@ -403,6 +501,11 @@ class Gr00tRemoteClosedloopPolicy(PolicyBase):
             )
 
     def _extract_hold_action(self, observation: dict[str, Any]) -> torch.Tensor:
+        if self.config.async_hold_mode == "last_action" and self._last_action_target is not None:
+            return self._last_action_target.to(device=self.device, dtype=torch.float)
+        return self._extract_current_joint_hold_action(observation)
+
+    def _extract_current_joint_hold_action(self, observation: dict[str, Any]) -> torch.Tensor:
         """Build the action vector that waiting envs should hold: their current sim joint positions
         copied into the action slots that share a joint name with the state config."""
         joint_pos_sim = observation["policy"]["robot_joint_pos"].to(device=self.device, dtype=torch.float)

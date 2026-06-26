@@ -136,6 +136,11 @@ def _build_policy(
     scheduler_mode: str | None = None,
     async_metrics_path: str | None = None,
     async_trace_path: str | None = None,
+    async_time_aligned: bool = False,
+    async_action_chunk_length: int | None = None,
+    async_action_start_offset_steps: int = 0,
+    async_prefetch_lead_steps: int = 25,
+    async_hold_mode: str = "last_action",
 ):
     from isaaclab_arena_gr00t.policy.gr00t_remote_closedloop_policy import (
         Gr00tRemoteClosedloopPolicy,
@@ -154,12 +159,16 @@ def _build_policy(
         remote_host="unused",
         remote_port=0,
         remote_api_token=None,
-        async_prefetch_lead_steps=25,
+        async_prefetch_lead_steps=async_prefetch_lead_steps,
+        async_time_aligned=async_time_aligned,
         async_step_dt=0.02,
         async_network_delay_s=0.0,
         async_metrics_path=async_metrics_path,
         async_trace_path=async_trace_path,
         async_status_ui=False,
+        async_action_chunk_length=async_action_chunk_length,
+        async_action_start_offset_steps=async_action_start_offset_steps,
+        async_hold_mode=async_hold_mode,
     )
     return Gr00tRemoteClosedloopPolicy(
         args,
@@ -345,6 +354,75 @@ def test_async_edf_writes_control_time_metrics_on_close(
     assert metrics_path.exists()
 
 
+def test_async_edf_can_execute_time_aligned_tail_of_policy_horizon(
+    policy_config_yaml, synthetic_observation, fake_client_factory
+):
+    fake_client_factory(ping_ok=True)
+    policy = _build_policy(
+        policy_config_yaml,
+        scheduler_mode="async_edf",
+        async_action_chunk_length=25,
+        async_action_start_offset_steps=25,
+    )
+    policy.set_task_description("pick up the brown box")
+
+    action = policy.get_action(env=None, observation=synthetic_observation)
+    metrics = policy._async_scheduler.metrics()
+    policy.close()
+
+    assert action.shape == (NUM_ENVS, EXPECTED_ACTION_DIM)
+    assert policy._async_worker is None
+    assert metrics["deadline_window_s"] == pytest.approx(0.5)
+    assert metrics["action_start_offset_steps"] == 25
+
+
+def test_async_edf_time_aligned_derives_tail_chunk_from_lead(
+    policy_config_yaml, synthetic_observation, fake_client_factory
+):
+    fake_client_factory(ping_ok=True)
+    policy = _build_policy(
+        policy_config_yaml,
+        scheduler_mode="async_edf",
+        async_time_aligned=True,
+        async_prefetch_lead_steps=10,
+    )
+    policy.set_task_description("pick up the brown box")
+
+    action = policy.get_action(env=None, observation=synthetic_observation)
+    metrics = policy._async_scheduler.metrics()
+    policy.close()
+
+    assert action.shape == (NUM_ENVS, EXPECTED_ACTION_DIM)
+    assert policy.async_action_chunk_length == 40
+    assert metrics["action_start_offset_steps"] == 10
+    assert metrics["deadline_window_s"] == pytest.approx(0.2)
+
+
+def test_async_edf_last_action_hold_replays_previous_action_target(
+    policy_config_yaml, synthetic_observation, fake_client_factory, monkeypatch
+):
+    fake_client_factory(ping_ok=True)
+    policy = _build_policy(
+        policy_config_yaml,
+        scheduler_mode="async_edf",
+        async_action_chunk_length=2,
+        async_prefetch_lead_steps=1,
+        async_hold_mode="last_action",
+    )
+    policy.set_task_description("pick up the brown box")
+
+    first_action = policy.get_action(env=None, observation=synthetic_observation)
+    second_action = policy.get_action(env=None, observation=synthetic_observation)
+    monkeypatch.setattr(policy._async_worker, "poll", lambda: [])
+    missed_action = policy.get_action(env=None, observation=synthetic_observation)
+    current_joint_hold = policy._extract_current_joint_hold_action(synthetic_observation)
+    policy.close()
+
+    torch.testing.assert_close(missed_action, second_action)
+    assert not torch.allclose(missed_action, current_joint_hold)
+    assert not torch.allclose(first_action, second_action)
+
+
 def test_async_edf_writes_one_trace_frame_per_action_step(
     tmp_path, policy_config_yaml, synthetic_observation, fake_client_factory
 ):
@@ -396,3 +474,36 @@ def test_remote_parser_defines_runner_kill_server_flag(policy_config_yaml) -> No
 
     assert args.remote_kill_on_exit is False
     assert args.async_trace_path is None
+
+
+def test_remote_parser_defines_async_time_alignment_flags(policy_config_yaml) -> None:
+    from isaaclab_arena_gr00t.policy.gr00t_remote_closedloop_policy import Gr00tRemoteClosedloopPolicy
+
+    parser = Gr00tRemoteClosedloopPolicy.add_args_to_parser(argparse.ArgumentParser())
+    args = parser.parse_args(
+        [
+            "--policy_config_yaml_path",
+            policy_config_yaml,
+            "--async_time_aligned",
+            "--async_action_chunk_length",
+            "25",
+            "--async_action_start_offset_steps",
+            "25",
+            "--async_hold_mode",
+            "last_action",
+        ]
+    )
+
+    assert args.async_time_aligned is True
+    assert args.async_action_chunk_length == 25
+    assert args.async_action_start_offset_steps == 25
+    assert args.async_hold_mode == "last_action"
+
+
+def test_remote_parser_defaults_to_last_action_hold(policy_config_yaml) -> None:
+    from isaaclab_arena_gr00t.policy.gr00t_remote_closedloop_policy import Gr00tRemoteClosedloopPolicy
+
+    parser = Gr00tRemoteClosedloopPolicy.add_args_to_parser(argparse.ArgumentParser())
+    args = parser.parse_args(["--policy_config_yaml_path", policy_config_yaml])
+
+    assert args.async_hold_mode == "last_action"
