@@ -94,6 +94,95 @@ git submodule update --init --recursive
 
 For detailed setup instructions (including server-client mode for GR00T), see the [Installation Guide](https://isaac-sim.github.io/IsaacLab-Arena/main/pages/quickstart/installation.html).
 
+## Experimental: Multi-Robot Async GR00T Evaluation
+
+This branch includes an experimental asynchronous GR00T evaluation path for studying one GPU serving
+multiple robot embodiments in one vectorized Isaac Lab-Arena scene. The demo runs one G1 loco-manip
+workcell per environment, sends one B=1 GR00T request at a time to a remote policy server, and records
+control-time deadline misses, queueing, inference latency, and mosaic videos.
+
+The example below assumes:
+
+- a GR00T policy server is already listening on `127.0.0.1:5555`;
+- the G1 loco-manipulation checkpoint is available to that server;
+- `C:\Isaac\envs\arena-py311\python.exe` is the local Isaac/Arena Python on Windows;
+- `C:\Projects\isaac` is this repository checkout.
+
+Set the local environment first:
+
+```powershell
+$env:OMNI_KIT_ACCEPT_EULA = 'Y'
+$env:ISAACLAB_ARENA_FORCE_EXIT_ON_COMPLETE = '1'
+$env:PYTHONPATH = 'C:\Projects\isaac\submodules\Isaac-GR00T;C:\Projects\isaac'
+```
+
+Run a 30 simulated-second N=5 visualization run:
+
+```powershell
+& C:\Isaac\envs\arena-py311\python.exe `
+  C:\Projects\isaac\isaaclab_arena\evaluation\policy_runner.py `
+  --headless `
+  --experience C:\Projects\isaac\submodules\IsaacLab\apps\isaaclab.python.rendering.kit `
+  --policy_type isaaclab_arena_gr00t.policy.gr00t_remote_closedloop_policy.Gr00tRemoteClosedloopPolicy `
+  --policy_config_yaml_path isaaclab_arena_gr00t/policy/config/g1_locomanip_gr00t_closedloop_config.yaml `
+  --remote_host 127.0.0.1 --remote_port 5555 `
+  --scheduler async_edf `
+  --async_time_aligned `
+  --async_prefetch_lead_steps 10 `
+  --async_step_dt 0.02 `
+  --async_metrics_path eval/async_vla_demo/n5_aligned_auto_lead10_last_action_full/metrics.json `
+  --async_trace_path eval/async_vla_demo/n5_aligned_auto_lead10_last_action_full/trace.json `
+  --num_steps 1500 --num_envs 5 --env_spacing 20 --enable_cameras `
+  --no-async_status_ui `
+  --mosaic_video --video_dir eval/videos/async_vla_n5_aligned_auto_lead10_last_action_full `
+  --mosaic_camera_mode planar `
+  galileo_g1_locomanip_pick_and_place `
+  --object brown_box --embodiment g1_wbc_joint
+```
+
+Render the scheduler status overlay and GPU/robot timeline:
+
+```powershell
+& C:\Isaac\envs\arena-py311\python.exe `
+  isaaclab_arena_gr00t/scripts/render_async_status_video.py `
+  --input-video eval/videos/async_vla_n5_aligned_auto_lead10_last_action_full/third-person-mosaic-step-0.mp4 `
+  --trace eval/async_vla_demo/n5_aligned_auto_lead10_last_action_full/trace.json `
+  --output-video eval/videos/async_vla_n5_aligned_auto_lead10_last_action_full/third-person-mosaic-status.mp4 `
+  --timeline eval/async_vla_demo/n5_aligned_auto_lead10_last_action_full/timeline.png
+```
+
+To stress the single-GPU queue, change only the robot count and output directories:
+
+```powershell
+--num_envs 6 `
+--async_metrics_path eval/async_vla_demo/n6_aligned_auto_lead10_last_action_full/metrics.json `
+--async_trace_path eval/async_vla_demo/n6_aligned_auto_lead10_last_action_full/trace.json `
+--video_dir eval/videos/async_vla_n6_aligned_auto_lead10_last_action_full
+```
+
+Important async parameters:
+
+| Parameter | Meaning |
+|-----------|---------|
+| `--scheduler async_edf` | Uses the per-env asynchronous deadline scheduler with one serial GR00T worker. |
+| `--async_time_aligned` | Drops the stale prefix of a prefetched policy horizon before executing it. |
+| `--async_prefetch_lead_steps` | Request lead time in control steps. With `--async_step_dt 0.02`, lead `10` gives a `0.2 s` simulated-time deadline window. |
+| `--async_step_dt` | Control-time duration of one policy action step. |
+| `--async_hold_mode last_action` | Default. During a miss, repeats the last action target sent to the simulator. Use `current_joint` for the older current-joint hold ablation. |
+| `--mosaic_video` | Records one third-person camera per env as a tiled MP4. This adds render overhead, so use metrics-only runs for capacity measurements. |
+| `--mosaic_camera_mode planar` | Keeps a close third-person view while smoothing X/Y camera motion and keeping orientation stable. |
+
+How to read the outputs:
+
+- `metrics.json` reports aggregate miss rate, hold time, inference wall time, virtual queue wait, and per-env metrics.
+- `trace.json` stores one scheduler snapshot per control step and is used to render the status overlay.
+- `third-person-mosaic-status.mp4` shows per-robot states: green execution, yellow queued, blue inference/gated, red miss/hold.
+- `timeline.png` shows robot lanes plus a GPU lane. GPU segments are in simulated control time; gray means idle.
+
+On the local Windows-native RTX 5090 setup used for this branch, N=5 is near the usable boundary and
+N=6 is a clear overload case for `lead=10`, with most misses caused by queueing behind the single
+serial GR00T worker. See `LOCAL_RUNTIME_SETUP.md` for workstation-specific notes and example results.
+
 ## Usage Example
 
 Compose a Franka arm in a kitchen scene with a couple of objects:
