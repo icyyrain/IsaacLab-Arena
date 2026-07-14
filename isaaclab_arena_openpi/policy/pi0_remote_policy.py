@@ -16,6 +16,7 @@ import websockets.exceptions
 from openpi_client import websocket_client_policy
 
 from isaaclab_arena.policy.policy_base import PolicyBase
+from isaaclab_arena.policy.traffic_capture import capture_vla_call
 from isaaclab_arena_openpi.policy.pi0_remote_config import DEFAULT_VARIANT, MAX_RECONNECT_ATTEMPTS, Pi0RemotePolicyArgs
 
 
@@ -226,7 +227,14 @@ class Pi0RemotePolicy(PolicyBase):
         """
         for attempt_index in range(MAX_RECONNECT_ATTEMPTS):
             try:
-                return self._websocket_client.infer(server_request)
+                return capture_vla_call(
+                    policy="openpi",
+                    transport="websocket",
+                    host=self._remote_host,
+                    port=self._remote_port,
+                    request_payload=server_request,
+                    call=lambda: self._websocket_client.infer(server_request),
+                )
             except (
                 websockets.exceptions.ConnectionClosedError,
                 websockets.exceptions.ConnectionClosedOK,

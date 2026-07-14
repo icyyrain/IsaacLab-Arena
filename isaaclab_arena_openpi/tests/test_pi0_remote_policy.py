@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import json
 import numpy as np
 import torch
 import types
@@ -134,6 +135,35 @@ def test_get_action_caches_chunk_and_advances_index(make_policy):
     assert first_action.dtype == torch.float32
     assert first_action[0, -1].item() == pytest.approx(0.2)
     assert second_action[0, -1].item() == pytest.approx(0.7)
+
+
+def test_openpi_remote_policy_writes_vla_traffic_capture(tmp_path, monkeypatch):
+    capture_path = tmp_path / "vla_traffic.jsonl"
+    monkeypatch.setenv("VLA_TRAFFIC_CAPTURE_PATH", str(capture_path))
+    _patch_websocket_client(monkeypatch)
+    policy = Pi0RemotePolicy(
+        Pi0RemotePolicyArgs(policy_device="cpu", remote_host="127.0.0.1", remote_port=8000),
+        openpi_embodiment_adapter=Pi0DroidAdapter(),
+    )
+    policy.set_task_description("pick up the block")
+
+    action = policy.get_action(_fake_env(num_envs=1), _fake_observation())
+
+    assert action.shape == (1, 8)
+    rows = [json.loads(line) for line in capture_path.read_text().splitlines()]
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["policy"] == "openpi"
+    assert row["transport"] == "websocket"
+    assert row["host"] == "127.0.0.1"
+    assert row["port"] == 8000
+    assert row["status"] == "ok"
+    assert row["request_bytes"] > 0
+    assert row["response_bytes"] > 0
+    assert row["request"]["observation/exterior_image_1_left"]["shape"] == [224, 224, 3]
+    assert row["request"]["observation/joint_position"]["shape"] == [7]
+    assert row["response"]["actions"]["shape"] == [15, 8]
+    assert "pick up the block" not in capture_path.read_text()
 
 
 def test_get_action_parallel_envs_loops_per_env(monkeypatch):

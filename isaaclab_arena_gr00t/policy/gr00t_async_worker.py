@@ -15,6 +15,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from isaaclab_arena.policy.action_scheduling import AsyncChunkRequest
+from isaaclab_arena.policy.traffic_capture import capture_vla_call
 
 
 @dataclass(frozen=True)
@@ -52,6 +53,8 @@ class Gr00tAsyncInferenceWorker:
         self._drain_on_close = False
         self._active_env_id: int | None = None
         self._active_lock = threading.Lock()
+        self._capture_host = "unknown"
+        self._capture_port = 0
         if autostart:
             self.start()
 
@@ -118,6 +121,8 @@ class Gr00tAsyncInferenceWorker:
         client = None
         try:
             client = self._client_factory()
+            self._capture_host = str(getattr(client, "host", "unknown"))
+            self._capture_port = int(getattr(client, "port", 0))
             if not client.ping():
                 raise ConnectionError("Cannot reach the GR00T policy server")
         except Exception as exc:
@@ -138,7 +143,21 @@ class Gr00tAsyncInferenceWorker:
                     self._active_env_id = metadata.env_id
                 started_wall_s = time.perf_counter()
                 try:
-                    action, _ = client.get_action(request.payload)
+                    action, _ = capture_vla_call(
+                        policy="gr00t_async",
+                        transport="zmq_msgpack",
+                        host=self._capture_host,
+                        port=self._capture_port,
+                        request_payload=request.payload,
+                        call=lambda: client.get_action(request.payload),
+                        response_payload=lambda response: response[0],
+                        extra={
+                            "env_id": metadata.env_id,
+                            "generation": metadata.generation,
+                            "deadline_sim_time_s": metadata.deadline_sim_time_s,
+                            "is_bootstrap": request.is_bootstrap,
+                        },
+                    )
                     error = None
                 except Exception as exc:
                     action = None

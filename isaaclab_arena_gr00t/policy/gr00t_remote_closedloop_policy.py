@@ -30,6 +30,7 @@ from isaaclab_arena.policy.action_scheduling import (
     SyncedBatchActionScheduler,
 )
 from isaaclab_arena.policy.policy_base import PolicyBase
+from isaaclab_arena.policy.traffic_capture import capture_vla_call
 from isaaclab_arena_gr00t.policy.async_metrics import (
     build_async_metrics,
     build_async_trace,
@@ -532,7 +533,15 @@ class Gr00tRemoteClosedloopPolicy(PolicyBase):
         previous_chunk_execution_s = None
         if self._timing_enabled and self._timing_last_chunk_fetch_end is not None:
             previous_chunk_execution_s = fetch_start - self._timing_last_chunk_fetch_end
-        robot_action_policy, _ = self._client.get_action(policy_observations)
+        robot_action_policy, _ = capture_vla_call(
+            policy="gr00t",
+            transport="zmq_msgpack",
+            host=self.config.remote_host,
+            port=self.config.remote_port,
+            request_payload=policy_observations,
+            call=lambda: self._client.get_action(policy_observations),
+            response_payload=lambda response: response[0],
+        )
         fetch_end = time.perf_counter()
 
         # 3. Action translation from policy output to sim action tensor

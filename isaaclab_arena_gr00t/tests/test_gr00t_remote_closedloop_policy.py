@@ -234,6 +234,34 @@ def test_action_response_is_translated_to_correct_tensor_shape(
     assert action.device.type == "cpu"
 
 
+def test_gr00t_remote_policy_writes_vla_traffic_capture(
+    tmp_path, monkeypatch, policy_config_yaml, synthetic_observation, fake_client_factory
+):
+    capture_path = tmp_path / "vla_traffic.jsonl"
+    monkeypatch.setenv("VLA_TRAFFIC_CAPTURE_PATH", str(capture_path))
+    fake_client_factory(ping_ok=True)
+    policy = _build_policy(policy_config_yaml)
+    policy.set_task_description("pick up the brown box")
+
+    policy._get_action_chunk(synthetic_observation, ["robot_head_cam_rgb"])
+
+    rows = [json.loads(line) for line in capture_path.read_text().splitlines()]
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["policy"] == "gr00t"
+    assert row["transport"] == "zmq_msgpack"
+    assert row["host"] == "unused"
+    assert row["port"] == 0
+    assert row["status"] == "ok"
+    assert row["latency_s"] >= 0.0
+    assert row["request_bytes"] > 0
+    assert row["response_bytes"] > 0
+    assert row["request"]["video"]["ego_view"]["shape"] == [NUM_ENVS, 1, ORIGINAL_HEIGHT, ORIGINAL_WIDTH, NUM_CHANNELS]
+    assert row["request"]["video"]["ego_view"]["dtype"] == "uint8"
+    assert row["request"]["language"]["annotation.human.task_description"]["shape"] == [NUM_ENVS, 1]
+    assert "pick up the brown box" not in capture_path.read_text()
+
+
 def test_reset_propagates_to_client(policy_config_yaml, fake_client_factory):
     clients = fake_client_factory(ping_ok=True)
     policy = _build_policy(policy_config_yaml)

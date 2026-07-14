@@ -108,6 +108,12 @@ The example below assumes:
 - `C:\Isaac\envs\arena-py311\python.exe` is the local Isaac/Arena Python on Windows;
 - `C:\Projects\isaac` is this repository checkout.
 
+Make sure port `5555` is served by the real GR00T model server, not a traffic replay server. A replay
+server can satisfy the same client API but returns recorded/lightweight actions in a few milliseconds,
+which makes the GPU lane look mostly idle and is not a real capacity measurement. As a quick sanity
+check, real GR00T N=5 runs on the local workstation have `inference_wall_s.p95` around `0.14-0.18 s`;
+replay runs are often around `0.01-0.03 s`.
+
 Set the local environment first:
 
 ```powershell
