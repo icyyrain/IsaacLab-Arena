@@ -1,0 +1,99 @@
+diff --git a/apps/isaaclab.python.kit b/apps/isaaclab.python.kit
+index cc54d43a4d..0d75228fc8 100644
+--- a/apps/isaaclab.python.kit
++++ b/apps/isaaclab.python.kit
+@@ -33 +32,0 @@ keywords = ["experience", "app", "usd"]
+-"isaacsim.sensors.rtx" = {}
+diff --git a/apps/isaaclab.python.rendering.kit b/apps/isaaclab.python.rendering.kit
+index ad58b15918..e55fd9374d 100644
+--- a/apps/isaaclab.python.rendering.kit
++++ b/apps/isaaclab.python.rendering.kit
+@@ -96 +96 @@ metricsAssembler.changeListenerEnabled = false
+-app.extensions.excluded = ["omni.kit.pip_archive"]
++app.extensions.excluded = ["omni.kit.pip_archive", "isaacsim.sensors.rtx", "omni.sensors.nv.lidar", "omni.sensors.nv.radar"]
+diff --git a/source/isaaclab/isaaclab/sim/spawners/from_files/from_files.py b/source/isaaclab/isaaclab/sim/spawners/from_files/from_files.py
+index ddb7f9ff2f..eb3a1dad2a 100644
+--- a/source/isaaclab/isaaclab/sim/spawners/from_files/from_files.py
++++ b/source/isaaclab/isaaclab/sim/spawners/from_files/from_files.py
+@@ -8 +7,0 @@ from __future__ import annotations
+-import fcntl
+@@ -13,0 +13,6 @@ from typing import TYPE_CHECKING
++try:
++    import fcntl
++except ModuleNotFoundError:
++    fcntl = None
++    import msvcrt
++
+@@ -39,0 +45,18 @@ logger = logging.getLogger(__name__)
++def _lock_file(lock_fd):
++    if fcntl is not None:
++        fcntl.flock(lock_fd, fcntl.LOCK_EX)
++    else:
++        lock_fd.write("0")
++        lock_fd.flush()
++        lock_fd.seek(0)
++        msvcrt.locking(lock_fd.fileno(), msvcrt.LK_LOCK, 1)
++
++
++def _unlock_file(lock_fd):
++    if fcntl is not None:
++        fcntl.flock(lock_fd, fcntl.LOCK_UN)
++    else:
++        lock_fd.seek(0)
++        msvcrt.locking(lock_fd.fileno(), msvcrt.LK_UNLCK, 1)
++
++
+@@ -316,2 +339,2 @@ def _spawn_from_usd_file(
+-        lock_fd = open(lock_path, "w")  # noqa: SIM115
+-        fcntl.flock(lock_fd, fcntl.LOCK_EX)
++        lock_fd = open(lock_path, "a+")  # noqa: SIM115
++        _lock_file(lock_fd)
+@@ -335 +358 @@ def _spawn_from_usd_file(
+-            fcntl.flock(lock_fd, fcntl.LOCK_UN)
++            _unlock_file(lock_fd)
+diff --git a/source/isaaclab_physx/isaaclab_physx/physics/physx_manager.py b/source/isaaclab_physx/isaaclab_physx/physics/physx_manager.py
+index 2298cbbb2d..fe330e5cd2 100644
+--- a/source/isaaclab_physx/isaaclab_physx/physics/physx_manager.py
++++ b/source/isaaclab_physx/isaaclab_physx/physics/physx_manager.py
+@@ -591 +591 @@ class PhysxManager(PhysicsManager):
+-        if not cls._warmup_needed:
++        if not cls._warmup_needed and cls._view is not None:
+@@ -592,0 +593,2 @@ class PhysxManager(PhysicsManager):
++        if cls._view is None:
++            cls._view_created = False
+@@ -606,10 +608,11 @@ class PhysxManager(PhysicsManager):
+-        if is_gpu:
+-            cls._physx_sim.attach_stage(stage_id)
+-
+-        # warmup physx
+-        cls._physx.force_load_physics_from_usd()
+-        cls._physx.start_simulation()
+-        cls._physx.update_simulation(cls.get_physics_dt(), 0.0)
+-        cls._physx_sim.fetch_results()
+-        cls._event_bus.dispatch_event(IsaacEvents.PHYSICS_WARMUP.value, payload={})
+-        cls._warmup_needed = False
++        if cls._warmup_needed:
++            if is_gpu:
++                cls._physx_sim.attach_stage(stage_id)
++
++            # warmup physx
++            cls._physx.force_load_physics_from_usd()
++            cls._physx.start_simulation()
++            cls._physx.update_simulation(cls.get_physics_dt(), 0.0)
++            cls._physx_sim.fetch_results()
++            cls._event_bus.dispatch_event(IsaacEvents.PHYSICS_WARMUP.value, payload={})
++            cls._warmup_needed = False
+@@ -622,0 +626,7 @@ class PhysxManager(PhysicsManager):
++        if cls._view is None:
++            for backend in ("torch", "numpy"):
++                logger.warning("Failed to create warp simulation view. Trying '%s' backend.", backend)
++                cls._view = omni.physics.tensors.create_simulation_view(backend, stage_id=stage_id)
++                cls._view_warp = omni.physics.tensors.create_simulation_view(backend, stage_id=stage_id)
++                if cls._view is not None:
++                    break
+@@ -631 +641,4 @@ class PhysxManager(PhysicsManager):
+-        cls._view_created = True
++        cls._view_created = cls._view is not None
++        if cls._view is None:
++            raise RuntimeError("Failed to create a PhysX simulation view.")
++        cls._callback_exception = None
