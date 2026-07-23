@@ -220,44 +220,64 @@ SAC 的 Bellman update 使用 `executed_action`。`policy_action` 仅用于分�
 
 ## 9. 软件架构
 
-长期功能放在新的顶层 extension/package 中，不修改 `submodules/IsaacLab`：
+### 9.1 官方 HIL-SERL 是算法基准
+
+算法基准固定为 `rail-berkeley/hil-serl` commit：
+
+```text
+c32939bccb65f3b8c43a9f9add3d322d4ab0264a
+```
+
+优先直接复用官方 `serl_launcher`、SAC/RLPD agent、replay/data store、Agentlace actor/learner 通信、demo/intervention 混合采样和 checkpoint 逻辑。不得重新实现一个简化 SAC 并将其称为 HIL-SERL。若必须修改上游代码，应保持 Apache-2.0 许可和来源说明，并把改动限制为明确的兼容层。
+
+第一版不复用真实 Franka ROS server、硬件控制器、相机驱动和任务专属 reset。仿真 ground-truth success 暂时代替视觉 reward classifier；因此第一版验证的是 HIL-SERL 的 off-policy learning、demonstration 和 intervention 核心，而不是完整的视觉系统。
+
+### 9.2 Windows/WSL2 进程边界
+
+Isaac Sim 环境和官方 HIL-SERL 使用隔离的 Python 环境：
+
+```text
+Windows native (Python 3.11)
+Isaac Sim + Factory + SpaceMouse + environment RPC server
+                         ^
+                         | observation/action/reset
+                         v
+WSL2 (Python 3.10)
+official HIL-SERL actor <-> official HIL-SERL learner
+              transitions -> | <- parameter synchronization
+```
+
+这样做有两个必要原因：
+
+- 已验证的 Isaac 环境使用 Gymnasium 1.2.1，官方 HIL-SERL 固定 Gymnasium 0.29.1，不能在同一环境中直接安装；
+- JAX 不支持原生 Windows NVIDIA GPU，learner 应在 WSL2/Linux 使用 CUDA。WSL2 不运行 Isaac Sim，因此不依赖 Vulkan/PhysX 图形接口。
+
+长期功能放在新的顶层 integration package 中，不修改 `submodules/IsaacLab`，也不复制官方 learner：
 
 ```text
 isaaclab_hil_serl/
 ├── config/
 ├── isaaclab_hil_serl/
 │   ├── envs/
-│   │   └── factory_adapter.py
-│   ├── learning/
-│   │   ├── actor.py
-│   │   ├── learner.py
-│   │   └── replay_buffer.py
+│   │   ├── factory_adapter.py
+│   │   └── factory_rpc_server.py
+│   ├── protocol/
+│   │   ├── messages.py
+│   │   └── remote_env.py
 │   ├── teleop/
 │   │   ├── intervention_manager.py
 │   │   └── spacemouse.py
 │   ├── data/
-│   │   ├── schema.py
-│   │   └── dataset.py
+│   │   └── validation.py
 │   └── evaluation/
 │       └── autonomous_eval.py
 ├── scripts/
+│   ├── run_windows_env_server.py
 │   ├── collect_demos.py
-│   ├── train_sac.py
 │   ├── train_hil_serl.py
 │   └── evaluate.py
 ├── tests/
-├── setup.py
 └── pyproject.toml
-```
-
-优先评估复用官方 HIL-SERL learner，而不是直接手写一个简化 SAC 并称其为 HIL-SERL。如果 JAX learner 与 Isaac Sim 不适合同进程运行，则使用官方风格的异步架构：
-
-```text
-Isaac Sim actor process
-       -> transitions/data store
-learner process
-       -> periodic parameter synchronization
-Isaac Sim actor process
 ```
 
 ## 10. 指标
@@ -297,16 +317,18 @@ Isaac Sim actor process
 
 ### M1：环境适配与数据协议
 
+- 在隔离环境中安装固定 commit 的官方 HIL-SERL，并完成最小 actor/learner smoke test；
 - 创建 `isaaclab_hil_serl` extension；
 - 实现统一 action adapter；
+- 实现 Windows environment RPC server 和 WSL2 remote Gym env；
 - 实现 transition schema 和持久化；
 - 添加 action switch、episode boundary 和 dataset round-trip 测试。
 
-完成标准：随机策略、scripted action 和人工 action 都能生成可验证的数据集。
+完成标准：随机策略、scripted action 和人工 action 都能生成可验证的数据集，并且 WSL2 actor 能 reset/step Windows Factory 环境。
 
 ### M2：SAC baseline
 
-- 接入选定的 off-policy learner；
+- 接入固定版本的官方 HIL-SERL SAC/RLPD learner；
 - 完成 E1；
 - 固定网络、normalization、UTD 和 seed 配置；
 - 输出 autonomous evaluation 和学习曲线。
@@ -357,7 +379,7 @@ Isaac Sim actor process
 
 > 固定一个成熟的 Franka 插入环境，以 Online SAC、SAC + Demo、SAC + Demo + Intervention 三组公平消融为主线，用自主成功率、样本效率和人工成本验证 HIL-SERL；Factory、AutoMate 和 USB 只代表不同难度的实验载体。
 
-## 14. 当前执行状态（2026-07-22）
+## 14. 当前执行状态（2026-07-23）
 
 - 独立 worktree：`C:\Projects\isaac-hil-serl`。
 - 分支：`icyyrain/feature/hil-serl-sim-validation`，基于 `origin/main`。
@@ -369,9 +391,22 @@ Isaac Sim actor process
 - seed 0 的单环境 PPO rollout 在第 54 个 environment step 触发 Factory 官方插入成功判定。
 - 已生成 1280×720、15 FPS 的可视化插入视频；录制路径显式执行 Fabric 到 RTX 场景的姿态同步，画面可见机械臂移动、对准和插入。
 - `tools/run_windows_factory_ppo_demo.ps1` 提供可复现入口，并通过显式离屏相机和 Kit render update 适配本机无 GUI 录制；运行结束后自动检查非空帧和显著帧间运动，静止视频会判定失败。
+- 官方 `rail-berkeley/hil-serl` 已作为 `third_party/hil-serl` submodule 固定到 commit `c32939b`。
+- WSL2 Ubuntu 22.04、Python 3.10.12 和 RTX 5090 CUDA 映射均可用。
+- 官方 HIL-SERL 的 Gymnasium 0.29.1 与 Windows Isaac 环境的 1.2.1 冲突，因此确定采用 Windows environment server + WSL2 official actor/learner 的隔离架构。
+- WSL2 隔离环境 `/root/.venvs/hil-serl-c32939b` 已验证 JAX 0.4.35 CUDA、官方 `SACAgent`、`ReplayBuffer` 和 Agentlace `TrainerServer/TrainerClient` 均可导入运行。
+- 上游 open-ended requirements 在 2026 年会错误升级 JAX/OpenCV；已将验证通过的关键版本记录在 `requirements/hil-serl-wsl-constraints.txt`。
+- `isaaclab_hil_serl.protocol` 已实现无 pickle 的 length-prefixed JSON/NumPy RPC、Windows environment server 和 WSL2 `RemoteEnv`。
+- `Isaac-Factory-PegInsert-Direct-v0` 已接入 RPC：wire observation 为固定字段顺序的 43 维 `float32` state，action 为归一化的 6D EEF delta。
+- transition schema 已区分 `policy_action` 与 `executed_action`，处理 success terminal 与 timeout truncation，并支持不使用 pickle 的 NPZ 持久化、episode boundary 校验和 dataset round-trip。
+- host-side adapter、RPC、collector 和数据协议测试为 13/13 通过。
+- 真实链路已经跑通：WSL2 官方 `SACAgent` 在 RTX 5090 上采样动作，Windows Factory 执行 PhysX step，transition 回到 WSL2 后完成官方 actor、critic 和 temperature 的一次 GPU 梯度更新。
+- scripted action switch 已在真实链路验证：策略 proposal 与脚本动作不同时，Factory 执行脚本动作，`info["intervene_action"]` 和 SERL Bellman transition 均保存实际执行动作。
+- 多步 collector 已从真实 Factory 采集 5 条 transition（含 1 条 scripted intervention），保存为无 pickle NPZ 后在 WSL2 完整重载并重新校验；smoke 数据位于忽略提交的 `logs/hil_serl_smoke/`。
+- 官方 Agentlace 最小 actor/learner 网络链路已通过：`QueuedDataStore` 上传 5/5 条 transition，learner replay 完成一次官方 SAC GPU update，并把新参数广播回 actor callback。
 
-M0（官方 PPO smoke baseline）已完成。下一步进入 M1：
+M0（官方 PPO smoke baseline）已完成。M1 当前约完成 **90%**。尚未完成的 M1 工作：
 
-1. 建立顶层 `isaaclab_hil_serl` package；
-2. 为 Factory 环境增加 action/transition adapter；
-3. 实现可测试的 transition schema、episode boundary 和 action switch，再开始 SAC/HIL-SERL learner 接入。
+1. 接入 SpaceMouse，把人工 action 走同一 action switch 和 transition schema；
+2. 把当前同进程 Agentlace 网络 smoke 扩展成独立 actor/learner 的长运行测试，验证断线、持续 replay ingestion 和多次参数同步；
+3. 完成以上两项回归后，再进入 M2 的正式 E1 Online SAC 训练。

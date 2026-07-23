@@ -4,3 +4,6 @@
 [submodule "submodules/Isaac-GR00T"]
 	path = submodules/Isaac-GR00T
 	url = git@github.com:NVIDIA/Isaac-GR00T.git
+[submodule "third_party/hil-serl"]
+	path = third_party/hil-serl
+	url = https://github.com/rail-berkeley/hil-serl.git

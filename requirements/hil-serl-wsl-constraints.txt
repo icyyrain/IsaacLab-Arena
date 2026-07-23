@@ -1,0 +1,25 @@
+# Reproduced with rail-berkeley/hil-serl at:
+# c32939bccb65f3b8c43a9f9add3d322d4ab0264a
+#
+# The upstream requirements contain open-ended lower bounds. Without these
+# constraints, a 2026 install upgrades JAX to 0.6.x and OpenCV to 5.x, which is
+# incompatible with the upstream JAX 0.4.35 setup and SciPy 1.11.4.
+
+jax==0.4.35
+jaxlib==0.4.35
+jax-cuda12-pjrt==0.4.35
+jax-cuda12-plugin==0.4.35
+flax==0.10.2
+optax==0.2.4
+chex==0.1.88
+orbax-checkpoint==0.10.2
+distrax==0.1.5
+
+numpy==1.26.4
+scipy==1.11.4
+opencv-python==4.11.0.86
+gymnasium==0.29.1
+
+# JAX 0.4.35 fails while importing the current 12.9.86 NVCC namespace wheel.
+# 12.8.93 supports the RTX 5090 and has been verified with a CUDA matmul.
+nvidia-cuda-nvcc-cu12==12.8.93
