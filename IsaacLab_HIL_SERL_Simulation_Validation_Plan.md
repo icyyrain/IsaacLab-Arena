@@ -361,15 +361,17 @@ Isaac Sim actor process
 
 - 独立 worktree：`C:\Projects\isaac-hil-serl`。
 - 分支：`icyyrain/feature/hil-serl-sim-validation`，基于 `origin/main`。
-- IsaacLab 子模块已固定在主仓库记录的 `55df2c3`，未修改子模块源码。
-- 独立容器 `isaaclab_arena-latest-isaac-hil-serl` 已启动；Arena package 导入和 RTX 5090 CUDA compute 检测成功。
+- IsaacLab 子模块固定在主仓库记录的 `55df2c3`；Windows-native 运行使用已单独提交的兼容补丁，不新增本任务专属的子模块改动。
+- 独立容器 `isaaclab_arena-latest-isaac-hil-serl` 可以导入 Arena package 并检测 RTX 5090 CUDA compute，但 Docker Desktop/WSL2 没有向 Isaac Sim 提供可用的 Vulkan/PhysX 图形接口，因此不作为本机 PPO 运行路径。
 - Factory 官方 PPO checkpoint 已从 Isaac Sim 6.0 资产服务器成功下载，大小约 203 MiB。
-- PPO rollout 尚未成功进入环境 step loop。当前 Docker Desktop/WSL2 后端没有向 Isaac Sim 容器提供可用的 Vulkan 和 `/dev/nvidia*` 图形/PhysX 接口：GPU 模式在 PhysX 初始化时回退到 CPU 并产生 CPU/CUDA tensor mismatch；明确的 CPU 模式也因无有效 PhysX tensor stage 而失败。
-- 本机 Windows-native 环境是 Isaac Sim 5.1 / IsaacLab 4.5.24，并从旧 worktree 的本地兼容补丁导入；它与本分支要求的 Isaac Sim 6.0 / Isaac Lab 3.0 Beta 不匹配，因此没有将旧 worktree 的未提交补丁复制到本项目。
+- 本机 Windows-native Isaac Sim 5.1 已成功运行当前 IsaacLab 子模块的 Factory 环境、PhysX GPU step 和 RL-Games PPO policy。
+- 官方 checkpoint 的 NumPy 2 pickle 路径与本机 NumPy 1.26 不兼容；运行脚本会生成本地兼容副本，不修改原 checkpoint。
+- seed 0 的单环境 PPO rollout 在第 54 个 environment step 触发 Factory 官方插入成功判定。
+- 已生成 1280×720、15 FPS 的可视化插入视频；录制路径显式执行 Fabric 到 RTX 场景的姿态同步，画面可见机械臂移动、对准和插入。
+- `tools/run_windows_factory_ppo_demo.ps1` 提供可复现入口，并通过显式离屏相机和 Kit render update 适配本机无 GUI 录制；运行结束后自动检查非空帧和显著帧间运动，静止视频会判定失败。
 
-M0 的下一项基础设施决策是二选一：
+M0（官方 PPO smoke baseline）已完成。下一步进入 M1：
 
-1. 在原生 Linux + NVIDIA Container Toolkit/Vulkan 可用的机器上运行当前容器；或
-2. 建立与本分支完全匹配的 Windows-native Isaac Sim 6.0 环境，并把必要的 Windows 兼容改动作为可审查、可复现的独立变更处理。
-
-在其中一条路径跑通以前，不开始 SAC/HIL-SERL 实现，否则无法区分算法问题和仿真运行时问题。
+1. 建立顶层 `isaaclab_hil_serl` package；
+2. 为 Factory 环境增加 action/transition adapter；
+3. 实现可测试的 transition schema、episode boundary 和 action switch，再开始 SAC/HIL-SERL learner 接入。
