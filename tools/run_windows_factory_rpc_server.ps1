@@ -3,7 +3,12 @@ param(
     [int]$Port = 18765,
     [int]$Seed = 0,
     [ValidateSet("sparse_success", "factory")]
-    [string]$RewardMode = "sparse_success"
+    [string]$RewardMode = "sparse_success",
+    [ValidateSet("none", "spacemouse")]
+    [string]$InterventionDevice = "none",
+    [double]$SpaceMouseDeadzone = 0.05,
+    [double]$SpaceMouseTranslationScale = 1.0,
+    [double]$SpaceMouseRotationScale = 1.0
 )
 
 $ErrorActionPreference = "Stop"
@@ -36,6 +41,10 @@ try {
         --port $Port `
         --seed $Seed `
         --reward_mode $RewardMode `
+        --intervention_device $InterventionDevice `
+        --spacemouse_deadzone $SpaceMouseDeadzone `
+        --spacemouse_translation_scale $SpaceMouseTranslationScale `
+        --spacemouse_rotation_scale $SpaceMouseRotationScale `
         --headless `
         --device cuda:0 `
         --experience $experience

@@ -37,6 +37,8 @@ InterventionProvider = Callable[[np.ndarray, np.ndarray], np.ndarray | None]
 class OneShotInterventionProvider:
     """Override the first action of every episode with a configured action."""
 
+    source = "scripted"
+
     def __init__(self, action: np.ndarray):
         self._action = np.asarray(action, dtype=np.float32).copy()
         assert self._action.shape == (
@@ -173,12 +175,18 @@ class FactoryStateEnvAdapter(gym.Env):
             # Upstream train_rlpd.py uses the presence of this key to replace
             # the proposed policy action in the stored Bellman transition.
             info["intervene_action"] = intervention_action
+            info["intervention_source"] = getattr(self.intervention_provider, "source", "external")
 
         self._last_observation = state
         return state, reward, terminated, truncated, info
 
     def close(self) -> None:
-        self._env.close()
+        try:
+            close_intervention = getattr(self.intervention_provider, "close", None)
+            if close_intervention is not None:
+                close_intervention()
+        finally:
+            self._env.close()
 
     def _extract_state(self, observation: dict[str, torch.Tensor]) -> np.ndarray:
         assert "critic" in observation, f"Factory observation has no critic state: {tuple(observation)}"

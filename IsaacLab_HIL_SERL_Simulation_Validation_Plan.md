@@ -317,6 +317,8 @@ isaaclab_hil_serl/
 
 ### M1：环境适配与数据协议
 
+**状态：已完成（2026-07-23）。**
+
 - 在隔离环境中安装固定 commit 的官方 HIL-SERL，并完成最小 actor/learner smoke test；
 - 创建 `isaaclab_hil_serl` extension；
 - 实现统一 action adapter；
@@ -399,14 +401,13 @@ isaaclab_hil_serl/
 - `isaaclab_hil_serl.protocol` 已实现无 pickle 的 length-prefixed JSON/NumPy RPC、Windows environment server 和 WSL2 `RemoteEnv`。
 - `Isaac-Factory-PegInsert-Direct-v0` 已接入 RPC：wire observation 为固定字段顺序的 43 维 `float32` state，action 为归一化的 6D EEF delta。
 - transition schema 已区分 `policy_action` 与 `executed_action`，处理 success terminal 与 timeout truncation，并支持不使用 pickle 的 NPZ 持久化、episode boundary 校验和 dataset round-trip。
-- host-side adapter、RPC、collector 和数据协议测试为 13/13 通过。
+- host-side adapter、RPC、collector、SpaceMouse provider 和数据协议测试为 16/16 通过。
 - 真实链路已经跑通：WSL2 官方 `SACAgent` 在 RTX 5090 上采样动作，Windows Factory 执行 PhysX step，transition 回到 WSL2 后完成官方 actor、critic 和 temperature 的一次 GPU 梯度更新。
 - scripted action switch 已在真实链路验证：策略 proposal 与脚本动作不同时，Factory 执行脚本动作，`info["intervene_action"]` 和 SERL Bellman transition 均保存实际执行动作。
 - 多步 collector 已从真实 Factory 采集 5 条 transition（含 1 条 scripted intervention），保存为无 pickle NPZ 后在 WSL2 完整重载并重新校验；smoke 数据位于忽略提交的 `logs/hil_serl_smoke/`。
 - 官方 Agentlace 最小 actor/learner 网络链路已通过：`QueuedDataStore` 上传 5/5 条 transition，learner replay 完成一次官方 SAC GPU update，并把新参数广播回 actor callback。
+- Windows server 已接入 Isaac Lab 原生 `Se3SpaceMouse`：运动超过 deadzone 时接管，回中时释放，人工动作经过统一归一化、clipping、action switch 和 transition schema；fake-device 回归已验证人工动作可保存、重载为合法 NPZ 数据集。
+- 当前主机未连接 SpaceMouse，因此本轮不能执行真实 HID 人手移动；接入代码可用 `run_windows_factory_rpc_server.ps1 -InterventionDevice spacemouse` 直接启用，真实操作员实验属于 M4 的 intervention ablation。
+- 独立进程回归已通过：Windows Factory、WSL2 actor 和 WSL2 learner 三进程运行，8/8 条 transition 上传到 replay，完成 3 次官方 SAC GPU update，actor 收到更新后的第二个参数版本；其中 1 条 scripted intervention 被保存在数据集中。
 
-M0（官方 PPO smoke baseline）已完成。M1 当前约完成 **90%**。尚未完成的 M1 工作：
-
-1. 接入 SpaceMouse，把人工 action 走同一 action switch 和 transition schema；
-2. 把当前同进程 Agentlace 网络 smoke 扩展成独立 actor/learner 的长运行测试，验证断线、持续 replay ingestion 和多次参数同步；
-3. 完成以上两项回归后，再进入 M2 的正式 E1 Online SAC 训练。
+M0（官方 PPO smoke baseline）和 M1（环境适配与数据协议）均已完成。下一步进入 M2，固定 E1 Online SAC 的训练配置并运行第一轮持续训练。

@@ -9,6 +9,7 @@ import numpy as np
 import torch
 import types
 
+from isaaclab_hil_serl.data import collect_transitions, load_transition_dataset, save_transition_dataset
 from isaaclab_hil_serl.envs.factory_adapter import (
     FACTORY_ACTION_DIM,
     FACTORY_STATE_DIM,
@@ -16,6 +17,7 @@ from isaaclab_hil_serl.envs.factory_adapter import (
     FactoryStateEnvAdapter,
     OneShotInterventionProvider,
 )
+from isaaclab_hil_serl.teleop import SpaceMouseInterventionProvider
 
 
 class _FakeFactoryEnv:
@@ -45,6 +47,17 @@ class _FakeFactoryEnv:
 
     def close(self):
         self.closed = True
+
+
+class _FakeSpaceMouse:
+    def __init__(self, action):
+        self.action = action
+
+    def advance(self):
+        return self.action
+
+    def reset(self):
+        pass
 
 
 def test_factory_state_contract_and_sparse_reward():
@@ -118,5 +131,28 @@ def test_one_shot_intervention_rearms_on_reset():
     assert first_info["intervention"]
     assert not second_info["intervention"]
     assert reset_info["intervention"]
+    assert first_info["intervention_source"] == "scripted"
     np.testing.assert_array_equal(first_info["executed_action"], intervention_action)
     np.testing.assert_array_equal(second_info["executed_action"], policy_action)
+
+
+def test_spacemouse_intervention_generates_validated_dataset(tmp_path):
+    human_action = np.full(FACTORY_ACTION_DIM, 0.25, dtype=np.float32)
+    provider = SpaceMouseInterventionProvider(_FakeSpaceMouse(human_action), deadzone=0.05)
+    adapter = FactoryStateEnvAdapter(_FakeFactoryEnv(), intervention_provider=provider)
+    transitions = collect_transitions(
+        adapter,
+        lambda observation: np.zeros(FACTORY_ACTION_DIM, dtype=np.float32),
+        num_transitions=2,
+    )
+
+    assert all(item.intervention for item in transitions)
+    assert all(item.source == "intervention" for item in transitions)
+    np.testing.assert_array_equal(transitions[0].executed_action, human_action)
+    np.testing.assert_array_equal(transitions[0].to_serl_dict()["actions"], human_action)
+
+    dataset_path = save_transition_dataset(tmp_path / "spacemouse-transitions.npz", transitions)
+    loaded = load_transition_dataset(dataset_path)
+    assert len(loaded) == len(transitions)
+    assert all(item.intervention for item in loaded)
+    np.testing.assert_array_equal(loaded[0].executed_action, human_action)

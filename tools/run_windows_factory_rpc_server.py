@@ -17,6 +17,7 @@ from isaaclab_tasks.utils import add_launcher_args, launch_simulation, resolve_t
 
 from isaaclab_hil_serl.envs import FactoryStateEnvAdapter, OneShotInterventionProvider
 from isaaclab_hil_serl.protocol import EnvironmentRpcServer
+from isaaclab_hil_serl.teleop import SpaceMouseInterventionProvider
 
 with contextlib.suppress(ImportError):
     import isaaclab_tasks_experimental  # noqa: F401
@@ -36,6 +37,15 @@ parser.add_argument(
     metavar=("DX", "DY", "DZ", "DROLL", "DPITCH", "DYAW"),
     help="Override the first policy action of every episode; values must be in [-1, 1].",
 )
+parser.add_argument(
+    "--intervention_device",
+    choices=["none", "spacemouse"],
+    default="none",
+    help="Human input device that overrides policy actions while it is moving.",
+)
+parser.add_argument("--spacemouse_deadzone", type=float, default=0.05)
+parser.add_argument("--spacemouse_translation_scale", type=float, default=1.0)
+parser.add_argument("--spacemouse_rotation_scale", type=float, default=1.0)
 add_launcher_args(parser)
 args_cli, hydra_args = parser.parse_known_args()
 sys.argv = [sys.argv[0]] + hydra_args
@@ -51,8 +61,17 @@ def main() -> None:
     with launch_simulation(env_cfg, args_cli):
         env = gym.make(args_cli.task, cfg=env_cfg)
         intervention_provider = None
+        assert not (
+            args_cli.scripted_intervention_action is not None and args_cli.intervention_device != "none"
+        ), "Choose either scripted intervention or a human intervention device"
         if args_cli.scripted_intervention_action is not None:
             intervention_provider = OneShotInterventionProvider(args_cli.scripted_intervention_action)
+        elif args_cli.intervention_device == "spacemouse":
+            intervention_provider = SpaceMouseInterventionProvider.create_isaaclab(
+                deadzone=args_cli.spacemouse_deadzone,
+                translation_scale=args_cli.spacemouse_translation_scale,
+                rotation_scale=args_cli.spacemouse_rotation_scale,
+            )
         adapter = FactoryStateEnvAdapter(
             env,
             reward_mode=args_cli.reward_mode,
